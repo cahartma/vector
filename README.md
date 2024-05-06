@@ -9,8 +9,18 @@ The `main` branch is empty except for this file.  The branches used by various R
 | 6.0 | Pending | Pending|  Pending |
 | 5.9 | release-5.9|v0.33.0|  Current |
 | 5.8 | release-5.8| v0.28.1|  Current |
-| 5.7 | release-5.7|v0.20.1| Current |
-| 5.6 | release-5.6|v1.20.1| Current |
+| 5.7 | release-5.7|v0.21.0| Current |
+| 5.6 | release-5.6|v0.21.0| Current |
+
+This project varies from the upstream with the following features:
+
+| Issue | Description | Release Added | Upstream Contribution |
+| ----- | ----------- |---------------|-----------------------|
+|LOG-2552|Replace Ring with OpenSSL| 5.5 |  |
+|LOG-3398|[Apply TLSSecurityProfile settings to TLS listeners in log collectors](https://github.com/ViaQ/vector/pull/129)| 5.6 | N/A - Relies upon OpenSSL patch |
+||[Add syslog sink](https://github.com/ViaQ/vector/pull/133) |5.7| [Open](https://github.com/vectordotdev/vector/pull/17668) |
+|LOG-3949|[Add file rotate wait](https://github.com/ViaQ/vector/pull/154)|5.8|[Accepted](https://github.com/vectordotdev/vector/pull/18904)|
+|LOG-4739|[Add Support for include_paths_glob_pattern](https://github.com/ViaQ/vector/pull/167)|5.9|[Accepted](https://github.com/vectordotdev/vector/pull/19521)|
 
 
 ## Issues
