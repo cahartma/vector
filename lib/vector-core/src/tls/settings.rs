@@ -12,6 +12,7 @@ use openssl::{
     ssl::{select_next_proto, AlpnError, ConnectConfiguration, SslContextBuilder, SslVerifyMode},
     stack::Stack,
     x509::{store::X509StoreBuilder, X509},
+    nid::Nid,
 };
 use snafu::ResultExt;
 use vector_config::configurable_component;
@@ -156,6 +157,12 @@ pub struct TlsConfig {
     #[configurable(metadata(docs::examples = "www.example.com"))]
     #[configurable(metadata(docs::human_name = "Server Name"))]
     pub server_name: Option<String>,
+
+    /// Minimal enabled TLS version.
+    pub min_tls_version: Option<String>,
+
+    /// TLS ciphersuites to enable.
+    pub ciphersuites: Option<String>,
 }
 
 impl TlsConfig {
@@ -178,6 +185,8 @@ pub struct TlsSettings {
     pub(super) identity: Option<IdentityStore>, // openssl::pkcs12::ParsedPkcs12 doesn't impl Clone yet
     alpn_protocols: Option<Vec<u8>>,
     server_name: Option<String>,
+    pub min_tls_version: Option<String>,
+    pub ciphersuites: Option<String>,
 }
 
 #[derive(Clone)]
@@ -213,6 +222,8 @@ impl TlsSettings {
             identity: options.load_identity()?,
             alpn_protocols: options.parse_alpn_protocols()?,
             server_name: options.server_name.clone(),
+            min_tls_version: options.min_tls_version.clone(),
+            ciphersuites: options.ciphersuites.clone(),
         })
     }
 
@@ -429,6 +440,7 @@ impl TlsConfig {
 
                 let pkcs12 = Pkcs12::builder()
                     .ca(ca_stack)
+                    .cert_algorithm(Nid::AES_256_CBC) // workaround for LOG-2460
                     .name(&name)
                     .pkey(&key)
                     .cert(&crt)
@@ -658,6 +670,8 @@ fn open_read(filename: &Path, note: &'static str) -> Result<(Vec<u8>, PathBuf)> 
 
 #[cfg(test)]
 mod test {
+    use openssl::ssl::{SslMethod, SslVersion, ErrorEx};
+
     use super::*;
 
     const TEST_PKCS12_PATH: &str = "tests/data/ca/intermediate_client/private/localhost.p12";
@@ -825,6 +839,72 @@ mod test {
     fn from_config_with_certificate() {
         let config = settings_from_config(Some(true), true, true, true);
         assert!(config.is_tls());
+    }
+
+    #[test]
+    fn from_min_tls_version() {
+        use std::result::Result;
+
+        let mut builder = SslContextBuilder::new(SslMethod::tls()).unwrap();
+        let orig_min_proto_version = builder.min_proto_version();
+        struct TlsVersionTest {
+            text: Option<String>,
+            num:  Option<SslVersion>,
+            want: Result<(), ErrorEx>,
+        }
+        let tests = [
+            TlsVersionTest{text: None, num: orig_min_proto_version, want: Ok(())},
+            TlsVersionTest{text: Some("".to_string()), num: orig_min_proto_version, want: Err(ErrorEx::InvalidTlsVersion)},
+            TlsVersionTest{text: Some("foobar".to_string()), num: Some(SslVersion::TLS1), want: Err(ErrorEx::InvalidTlsVersion)},
+            TlsVersionTest{text: Some("VersionTLS10".to_string()), num: Some(SslVersion::TLS1), want: Ok(())},
+            TlsVersionTest{text: Some("VersionTLS11".to_string()), num: Some(SslVersion::TLS1_1), want: Ok(())},
+            TlsVersionTest{text: Some("VersionTLS12".to_string()), num: Some(SslVersion::TLS1_2), want: Ok(())},
+            TlsVersionTest{text: Some("VersionTLS13".to_string()), num: Some(SslVersion::TLS1_3), want: Ok(())},
+        ];
+        for t in tests {
+            match builder.set_min_tls_version_and_ciphersuites(&t.text, &None) {
+                Ok(()) => {
+                    assert!(t.want.is_ok());
+                    assert_eq!(builder.min_proto_version(), t.num);
+                },
+                Err(e) => assert_eq!(t.want.err().unwrap(), e),
+            }
+        }
+    }
+
+    #[test]
+    fn from_min_tls_version_and_ciphersuites() {
+        use std::result::Result;
+
+        let mut builder = SslContextBuilder::new(SslMethod::tls()).unwrap();
+        struct TlsCiphersuiteTest {
+            min_tls_version: Option<String>,
+            ciphersuite: Option<String>,
+            want: Result<(), ErrorEx>,
+        }
+        let tests = [
+            TlsCiphersuiteTest {
+                min_tls_version: Some("VersionTLS10".to_string()),
+                ciphersuite: Some("".to_string()),
+                want: Err(ErrorEx::InvalidCiphersuite),
+            },
+            TlsCiphersuiteTest {
+                min_tls_version: Some("VersionTLS12".to_string()),
+                ciphersuite: Some("AES128-SHA256".to_string()),
+                want: Ok(()),
+            },
+            TlsCiphersuiteTest {
+                min_tls_version: Some("VersionTLS13".to_string()),
+                ciphersuite: Some("TLS_CHACHA20_POLY1305_SHA256,TLS_AES_256_GCM_SHA384".to_string()),
+                want: Ok(()),
+            },
+        ];
+        for t in tests {
+            match builder.set_min_tls_version_and_ciphersuites(&t.min_tls_version, &t.ciphersuite) {
+                Ok(()) => assert!(t.want.is_ok()),
+                Err(e) => assert_eq!(t.want.err().unwrap(), e),
+            }
+        }
     }
 
     fn settings_from_config(

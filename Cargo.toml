@@ -174,7 +174,6 @@ vrl.workspace = true
 proptest = { workspace = true, optional = true }
 proptest-derive = { workspace = true, optional = true }
 snafu.workspace = true
-
 # Internal libs
 dnsmsg-parser = { path = "lib/dnsmsg-parser", optional = true }
 fakedata = { path = "lib/fakedata", optional = true }
@@ -341,7 +340,7 @@ async-nats = { version = "0.33.0", default-features = false, optional = true }
 nkeys = { version = "0.4.4", default-features = false, optional = true }
 nom = { version = "7.1.3", default-features = false, optional = true }
 notify = { version = "7.0.0", default-features = false, features = ["macos_fsevent"] }
-openssl = { version = "0.10.68", default-features = false, features = ["vendored"] }
+openssl = { version = "0.10.68", default-features = false }
 openssl-probe = { version = "0.1.5", default-features = false }
 ordered-float = { version = "4.5.0", default-features = false }
 paste = "1.0.15"
@@ -430,8 +429,51 @@ nix = { git = "https://github.com/vectordotdev/nix.git", branch = "memfd/gnu/mus
 # The `heim` crates depend on `ntapi` 0.3.7 on Windows, but that version has an
 # unaligned access bug fixed in the following revision.
 ntapi = { git = "https://github.com/MSxDOS/ntapi.git", rev = "24fc1e47677fc9f6e38e5f154e6011dc9b270da6" }
+openssl = { path = "patch/openssl" }
+hyper = { path = "patch/hyper" }
 
 [features]
+ocp-logging = [
+  "sources-stdin",
+  "sources-file_descriptor",
+  "sources-file",
+  "sources-journald",
+  "sources-kubernetes_logs",
+  "sources-prometheus",
+  "sources-internal_metrics",
+  "sources-demo_logs",
+  "sources-http_server",
+  "sources-syslog",
+
+  "transforms-route",
+  "transforms-dedupe",
+  "transforms-filter",
+  "transforms-remap",
+  "transforms-lua",
+  "transforms-throttle",
+  "transforms-reduce",
+
+  "transforms-detect_exceptions",
+
+  "sinks-aws_cloudwatch_logs",
+  "sinks-azure_monitor_logs",
+  "sinks-elasticsearch",
+  "sinks-file",
+  "sinks-kafka",
+  "sinks-loki",
+  "sinks-console",
+  "sinks-prometheus",
+  "sinks-gcp",
+  "sinks-splunk_hec",
+  "sinks-http",
+  "sinks-socket",
+
+  "api",
+  "api-client",
+
+  "unix"
+]
+
 # Default features for *-unknown-linux-gnu and *-apple-darwin
 default = ["api", "api-client", "enrichment-tables", "sinks", "sources", "sources-dnstap", "transforms", "unix", "rdkafka?/gssapi-vendored", "secrets"]
 # Default features for `cargo docs`. The same as `default` but without `rdkafka?/gssapi-vendored` which would require installing libsasl in our doc build environment.
@@ -639,6 +681,7 @@ transforms = ["transforms-logs", "transforms-metrics"]
 transforms-logs = [
   "transforms-aws_ec2_metadata",
   "transforms-dedupe",
+  "transforms-detect_exceptions",
   "transforms-filter",
   "transforms-log_to_metric",
   "transforms-lua",
@@ -670,6 +713,7 @@ transforms-lua = ["dep:mlua", "vector-lib/lua"]
 transforms-metric_to_log = []
 transforms-reduce = ["transforms-impl-reduce"]
 transforms-remap = []
+transforms-detect_exceptions = []
 transforms-route = []
 transforms-exclusive-route = []
 transforms-sample = ["transforms-impl-sample"]

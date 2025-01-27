@@ -15,6 +15,7 @@ mod native_json;
 mod protobuf;
 mod raw_message;
 mod text;
+mod syslog;
 
 use std::fmt::Debug;
 
@@ -30,6 +31,7 @@ pub use native_json::{NativeJsonSerializer, NativeJsonSerializerConfig};
 pub use protobuf::{ProtobufSerializer, ProtobufSerializerConfig, ProtobufSerializerOptions};
 pub use raw_message::{RawMessageSerializer, RawMessageSerializerConfig};
 pub use text::{TextSerializer, TextSerializerConfig};
+pub use syslog::{SyslogSerializer, SyslogSerializerConfig};
 use vector_core::event::Event;
 
 /// Serialize a structured event into a byte frame.

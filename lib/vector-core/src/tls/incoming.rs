@@ -9,7 +9,7 @@ use std::{
 };
 
 use futures::{future::BoxFuture, stream, FutureExt, Stream};
-use openssl::ssl::{Ssl, SslAcceptor, SslMethod};
+use openssl::ssl::{Ssl, SslAcceptor, SslMethod, ErrorEx};
 use openssl::x509::X509;
 use snafu::ResultExt;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -18,7 +18,6 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 use tokio_openssl::SslStream;
-use tonic::transport::{server::Connected, Certificate};
 
 use super::{
     CreateAcceptorSnafu, HandshakeSnafu, IncomingListenerSnafu, MaybeTlsSettings, MaybeTlsStream,
@@ -31,8 +30,16 @@ impl TlsSettings {
         match self.identity {
             None => Err(TlsError::MissingRequiredIdentity),
             Some(_) => {
-                let mut acceptor = SslAcceptor::mozilla_intermediate(SslMethod::tls())
-                    .context(CreateAcceptorSnafu)?;
+                let mut acceptor = if self.min_tls_version.is_some() || self.ciphersuites.is_some() {
+                    SslAcceptor::custom(SslMethod::tls(), &self.min_tls_version, &self.ciphersuites)
+                    .map_err(|error_ex| match error_ex {
+                        ErrorEx::OpenSslError{error_stack: e} => TlsError::CreateAcceptor{source:e},
+                        ErrorEx::InvalidTlsVersion => TlsError::InvalidTlsVersion,
+                        ErrorEx::InvalidCiphersuite => TlsError::InvalidCiphersuite,
+                    })?
+                } else {
+                    SslAcceptor::mozilla_intermediate_v5(SslMethod::tls()).context(CreateAcceptorSnafu)?
+                };
                 self.apply_context_base(&mut acceptor, true)?;
                 Ok(acceptor.build())
             }
@@ -435,31 +442,6 @@ impl From<X509> for CertificateMetadata {
             organization_name: subject_metadata.get("organizationName").cloned(),
             organizational_unit_name: subject_metadata.get("organizationalUnitName").cloned(),
             common_name: subject_metadata.get("commonName").cloned(),
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct MaybeTlsConnectInfo {
-    pub remote_addr: SocketAddr,
-    pub peer_certs: Option<Vec<Certificate>>,
-}
-
-impl Connected for MaybeTlsIncomingStream<TcpStream> {
-    type ConnectInfo = MaybeTlsConnectInfo;
-
-    fn connect_info(&self) -> Self::ConnectInfo {
-        MaybeTlsConnectInfo {
-            remote_addr: self.peer_addr(),
-            peer_certs: self
-                .ssl_stream()
-                .and_then(|s| s.ssl().peer_cert_chain())
-                .map(|s| {
-                    s.into_iter()
-                        .filter_map(|c| c.to_pem().ok())
-                        .map(Certificate::from_pem)
-                        .collect()
-                }),
         }
     }
 }

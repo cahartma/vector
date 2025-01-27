@@ -108,6 +108,8 @@ mod pulsar;
 mod redis;
 #[cfg(feature = "transforms-impl-reduce")]
 mod reduce;
+#[cfg(feature = "transforms-detect_exceptions")]
+pub mod detect_exceptions;
 mod remap;
 mod sample;
 #[cfg(feature = "sinks-sematext")]

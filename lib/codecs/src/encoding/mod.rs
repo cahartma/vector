@@ -8,13 +8,13 @@ use std::fmt::Debug;
 
 use bytes::BytesMut;
 pub use format::{
-    AvroSerializer, AvroSerializerConfig, AvroSerializerOptions, CefSerializer,
-    CefSerializerConfig, CsvSerializer, CsvSerializerConfig, GelfSerializer, GelfSerializerConfig,
-    JsonSerializer, JsonSerializerConfig, JsonSerializerOptions, LogfmtSerializer,
-    LogfmtSerializerConfig, NativeJsonSerializer, NativeJsonSerializerConfig, NativeSerializer,
-    NativeSerializerConfig, ProtobufSerializer, ProtobufSerializerConfig,
-    ProtobufSerializerOptions, RawMessageSerializer, RawMessageSerializerConfig, TextSerializer,
-    TextSerializerConfig,
+    AvroSerializer, AvroSerializerConfig, AvroSerializerOptions, CsvSerializer, CefSerializer,
+    CefSerializerConfig, CsvSerializerConfig, GelfSerializer, GelfSerializerConfig, JsonSerializer,
+    JsonSerializerConfig, LogfmtSerializer, LogfmtSerializerConfig, NativeJsonSerializer,
+    NativeJsonSerializerConfig, NativeSerializer, NativeSerializerConfig, ProtobufSerializer,
+    ProtobufSerializerConfig, ProtobufSerializerOptions, RawMessageSerializer,
+    RawMessageSerializerConfig, TextSerializer, TextSerializerConfig,
+    SyslogSerializer, SyslogSerializerConfig
 };
 pub use framing::{
     BoxedFramer, BoxedFramingError, BytesEncoder, BytesEncoderConfig, CharacterDelimitedEncoder,
@@ -265,6 +265,10 @@ pub enum SerializerConfig {
     /// transform) and removing the message field while doing additional parsing on it, as this
     /// could lead to the encoding emitting empty strings for the given event.
     Text(TextSerializerConfig),
+
+    /// Syslog encoding
+    /// RFC 3164 and 5424 are supported
+    Syslog (SyslogSerializerConfig)
 }
 
 impl From<AvroSerializerConfig> for SerializerConfig {
@@ -333,6 +337,12 @@ impl From<TextSerializerConfig> for SerializerConfig {
     }
 }
 
+impl From<SyslogSerializerConfig> for SerializerConfig {
+    fn from(config: SyslogSerializerConfig) -> Self {
+        Self::Syslog(config)
+    }
+}
+
 impl SerializerConfig {
     /// Build the `Serializer` from this configuration.
     pub fn build(&self) -> Result<Serializer, Box<dyn std::error::Error + Send + Sync + 'static>> {
@@ -354,6 +364,7 @@ impl SerializerConfig {
                 Ok(Serializer::RawMessage(RawMessageSerializerConfig.build()))
             }
             SerializerConfig::Text(config) => Ok(Serializer::Text(config.build())),
+            SerializerConfig::Syslog(config) => Ok(Serializer::Syslog(config.build())),
         }
     }
 
@@ -383,6 +394,7 @@ impl SerializerConfig {
             | SerializerConfig::NativeJson
             | SerializerConfig::RawMessage
             | SerializerConfig::Text(_) => FramingConfig::NewlineDelimited,
+            | SerializerConfig::Syslog(_) => FramingConfig::NewlineDelimited,
             SerializerConfig::Gelf => {
                 FramingConfig::CharacterDelimited(CharacterDelimitedEncoderConfig::new(0))
             }
@@ -405,6 +417,7 @@ impl SerializerConfig {
             SerializerConfig::Protobuf(config) => config.input_type(),
             SerializerConfig::RawMessage => RawMessageSerializerConfig.input_type(),
             SerializerConfig::Text(config) => config.input_type(),
+            SerializerConfig::Syslog(config) => config.input_type(),
         }
     }
 
@@ -424,6 +437,7 @@ impl SerializerConfig {
             SerializerConfig::Protobuf(config) => config.schema_requirement(),
             SerializerConfig::RawMessage => RawMessageSerializerConfig.schema_requirement(),
             SerializerConfig::Text(config) => config.schema_requirement(),
+            SerializerConfig::Syslog(config) => config.schema_requirement(),
         }
     }
 }
@@ -453,6 +467,8 @@ pub enum Serializer {
     RawMessage(RawMessageSerializer),
     /// Uses a `TextSerializer` for serialization.
     Text(TextSerializer),
+    /// Uses a `SyslogSerializer` for serialization.
+    Syslog(SyslogSerializer),
 }
 
 impl Serializer {
@@ -466,6 +482,7 @@ impl Serializer {
             | Serializer::Logfmt(_)
             | Serializer::Text(_)
             | Serializer::Native(_)
+            | Serializer::Syslog(_)
             | Serializer::Protobuf(_)
             | Serializer::RawMessage(_) => false,
         }
@@ -488,6 +505,7 @@ impl Serializer {
             | Serializer::Logfmt(_)
             | Serializer::Text(_)
             | Serializer::Native(_)
+            | Serializer::Syslog(_)
             | Serializer::Protobuf(_)
             | Serializer::RawMessage(_) => {
                 panic!("Serializer does not support JSON")
@@ -562,6 +580,12 @@ impl From<TextSerializer> for Serializer {
     }
 }
 
+impl From<SyslogSerializer> for Serializer {
+    fn from(serializer: SyslogSerializer) -> Self {
+        Self::Syslog(serializer)
+    }
+}
+
 impl tokio_util::codec::Encoder<Event> for Serializer {
     type Error = vector_common::Error;
 
@@ -578,6 +602,7 @@ impl tokio_util::codec::Encoder<Event> for Serializer {
             Serializer::Protobuf(serializer) => serializer.encode(event, buffer),
             Serializer::RawMessage(serializer) => serializer.encode(event, buffer),
             Serializer::Text(serializer) => serializer.encode(event, buffer),
+            Serializer::Syslog(serializer) => serializer.encode(event, buffer),
         }
     }
 }

@@ -35,7 +35,7 @@ license-files = [
 ]
 
 [advisories]
-ignore = [
+ignore = [ 
     # Vulnerability in `rsa` crate: https://rustsec.org/advisories/RUSTSEC-2023-0071.html
     # There is not fix available yet.
     # https://github.com/vectordotdev/vector/issues/19262
@@ -58,4 +58,10 @@ ignore = [
     "RUSTSEC-2020-0168", # mach
     "RUSTSEC-2024-0370", # proc-macro-error
     "RUSTSEC-2024-0320", # yaml-rust
+]
+
+[bans]
+multiple-versions = "allow"
+deny = [
+    { name = "ring", wrappers = ["rustls", "sct", "rustls-webpki", "aws-config"] },
 ]
