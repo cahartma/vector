@@ -80,9 +80,9 @@ pub struct GcpAuthConfig {
     /// [gcp_api_key]: https://cloud.google.com/docs/authentication/api-keys
     pub api_key: Option<SensitiveString>,
 
-    /// Path to a [service account][gcp_service_account_credentials] credentials JSON file.
+    /// Path to a [service_account] or [external_account] credentials JSON file.
     ///
-    /// Either an API key or a path to a service account credentials JSON file can be specified.
+    /// Either an API key or a path to a credentials JSON file can be specified.
     ///
     /// If both are unset, the `GOOGLE_APPLICATION_CREDENTIALS` environment variable is checked for a filename. If no
     /// filename is named, an attempt is made to fetch an instance service account for the compute instance the program is
@@ -91,6 +91,17 @@ pub struct GcpAuthConfig {
     ///
     /// [gcp_service_account_credentials]: https://cloud.google.com/docs/authentication/production#manually
     pub credentials_path: Option<String>,
+
+
+    /// Workload Identity Pool provider (OIDC federation).
+    ///
+    /// This is the fully qualified provider name, e.g.,
+    /// `projects/123456789/locations/global/workloadIdentityPools/my-pool/providers/my-provider`
+    pub workload_identity_provider: Option<String>,
+
+    /// The GCP service account email to impersonate when using Workload Identity Federation.
+    pub service_account_email: Option<String>,
+
 
     /// Skip all authentication handling. For use with integration tests only.
     #[serde(default, skip_serializing)]
@@ -105,10 +116,11 @@ impl GcpAuthConfig {
         } else {
             let gap = std::env::var("GOOGLE_APPLICATION_CREDENTIALS").ok();
             let creds_path = self.credentials_path.as_ref().or(gap.as_ref());
-            match (&creds_path, &self.api_key) {
-                (Some(path), _) => GcpAuthenticator::from_file(path, scope).await?,
-                (None, Some(api_key)) => GcpAuthenticator::from_api_key(api_key.inner())?,
-                (None, None) => GcpAuthenticator::new_implicit().await?,
+            match (&creds_path, &self.api_key, &self.workload_identity_provider, &self.service_account_email) {
+                (Some(path), _, _, _) => GcpAuthenticator::from_file(path, scope).await?,
+                (None, Some(api_key), _, _) => GcpAuthenticator::from_api_key(api_key.inner())?,
+                (None, None, Some(provider), Some(email)) => GcpAuthenticator::with_external_account(provider, email).await?
+                (None, None, None, None) => GcpAuthenticator::new_implicit().await?,
             }
         })
     }
@@ -128,6 +140,25 @@ pub struct InnerCreds {
 }
 
 impl GcpAuthenticator {
+    pub async fn token(&self) -> crate::Result<Option<String>> {
+        match self {
+            Self::Credentials(inner) => {
+                if inner.is_token_expired() {
+                    inner.regenerate_token().await?;
+                }
+                let token_guard = inner.token.read().unwrap();
+                Ok(Some(token_guard.access_token().to_string()))
+            }
+            Self::ApiKey(_) | Self::None => Ok(None),
+        }
+    }
+
+    async fn with_external_account(provider: &str, email: &str) -> crate::Result<Self> {
+        let token = fetch_external_account_token(provider, email).await?;
+        let creds = None;
+        Ok(Self::Credentials(Arc::new(InnerCreds { creds, token: RwLock::new(token) })))
+    }
+
     async fn from_file(path: &str, scope: Scope) -> crate::Result<Self> {
         let creds = Credentials::from_file(path).context(InvalidCredentialsSnafu)?;
         let token = RwLock::new(fetch_token(&creds, &scope).await?);
@@ -222,6 +253,14 @@ impl GcpAuthenticator {
 }
 
 impl InnerCreds {
+    fn is_token_expired(&self) -> bool {
+        let token = self.token.read().unwrap();
+        let expiry_time = token.expires_in();
+        let current_time = chrono::Utc::now().timestamp();
+
+        expiry_time <= current_time
+    }
+
     async fn regenerate_token(&self) -> crate::Result<()> {
         let token = match &self.creds {
             Some((creds, scope)) => fetch_token(creds, scope).await?,
@@ -235,6 +274,68 @@ impl InnerCreds {
         let token = self.token.read().unwrap();
         format!("{} {}", token.token_type(), token.access_token())
     }
+}
+
+async fn fetch_external_account_token(provider: &str, email: &str) -> crate::Result<Token> {
+    let token_url = "https://sts.googleapis.com/v1/token";
+
+    let identity_token = fetch_identity_token(provider).await?;
+
+    let request_body = serde_json::json!({
+        "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+        "requested_token_type": "urn:ietf:params:oauth:token-type:access_token",
+        "subject_token_type": "urn:ietf:params:oauth:token-type:id_token",
+        "subject_token": identity_token,
+        "scope": "https://www.googleapis.com/auth/cloud-platform",
+    });
+
+    let req = http::Request::post(token_url)
+        .header("Content-Type", "application/json")
+        .body(hyper::Body::from(serde_json::to_string(&request_body)?))
+        .unwrap();
+
+    let proxy = ProxyConfig::from_env();
+    let res = HttpClient::new(None, &proxy)
+        .context(BuildHttpClientSnafu)?
+        .send(req)
+        .await
+        .context(GetTokenSnafu)?;
+
+    let body = res.into_body();
+    let bytes = hyper::body::to_bytes(body)
+        .await
+        .context(GetTokenBytesSnafu)?;
+
+    match serde_json::from_slice::<Token>(&bytes) {
+        Ok(token) => Ok(token),
+        Err(error) => Err(GcpError::TokenFromJson { source: error }),
+    }
+}
+
+async fn fetch_identity_token(provider: &str) -> crate::Result<String> {
+    let identity_url = format!(
+        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience={}",
+        provider
+    );
+
+    let req = http::Request::get(identity_url)
+        .header("Metadata-Flavor", "Google")
+        .body(hyper::Body::empty())
+        .unwrap();
+
+    let proxy = ProxyConfig::from_env();
+    let res = HttpClient::new(None, &proxy)
+        .context(BuildHttpClientSnafu)?
+        .send(req)
+        .await
+        .context(GetTokenSnafu)?;
+
+    let body = res.into_body();
+    let bytes = hyper::body::to_bytes(body)
+        .await
+        .context(GetTokenBytesSnafu)?;
+
+    Ok(String::from_utf8(bytes.to_vec()).unwrap())
 }
 
 async fn fetch_token(creds: &Credentials, scope: &Scope) -> crate::Result<Token> {
@@ -287,6 +388,50 @@ async fn get_token_implicit() -> Result<Token, GcpError> {
 mod tests {
     use super::*;
     use crate::assert_downcast_matches;
+    use crate::sinks::gcp::GcpAuthConfig;
+    use vector_lib::configurable::Configurable;
+
+    #[tokio::test]
+    async fn test_service_account_auth() {
+        let auth = GcpAuthConfig {
+            credentials_path: Some("tests/data/service_account.json".to_string()), // Replace with actual test key file path
+            api_key: None,
+            workload_identity_provider: None,
+            service_account_email: None,
+            skip_authentication: false,
+        };
+
+        let result = auth.build(Scope::LoggingWrite).await;
+        assert!(result.is_ok(), "Service account authentication should succeed");
+    }
+
+    #[tokio::test]
+    async fn test_workload_identity_auth() {
+        let auth = GcpAuthConfig {
+            credentials_path: None,
+            api_key: None,
+            workload_identity_provider: Some("projects/123456/locations/global/workloadIdentityPools/my-pool/providers/my-provider".to_string()),
+            service_account_email: Some("my-service-account@my-project.iam.gserviceaccount.com".to_string()),
+            skip_authentication: false,
+        };
+
+        let result = auth.build(Scope::LoggingWrite).await;
+        assert!(result.is_ok(), "Workload Identity Federation authentication should succeed");
+    }
+
+    #[tokio::test]
+    async fn test_missing_credentials() {
+        let auth = GcpAuthConfig {
+            credentials_path: None,
+            api_key: None,
+            workload_identity_provider: None,
+            service_account_email: None,
+            skip_authentication: false,
+        };
+
+        let result = auth.build(Scope::LoggingWrite).await;
+        assert!(result.is_err(), "Authentication should fail if no credentials are provided");
+    }
 
     #[tokio::test]
     async fn fails_missing_creds() {
@@ -353,4 +498,41 @@ mod tests {
         let config: GcpAuthConfig = toml::from_str(toml).expect("Invalid TOML");
         config.build(Scope::Compute).await
     }
+
+#[tokio::test]
+async fn test_mock_workload_identity_auth() {
+    use mockito::{mock, server_url};
+
+    // Mock Google's Secure Token Service (STS) API
+    let _sts_mock = mock("POST", "/v1/token")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"access_token":"mocked-token","expires_in":3600,"token_type":"Bearer"}"#)
+        .create();
+
+    let _oidc_mock = mock("GET", "/identity")
+        .with_status(200)
+        .with_body(r#"mock-oidc-identity-token"#)
+        .create();
+
+    let mock_sts_url = format!("{}/v1/token", server_url());
+    let mock_oidc_url = format!("{}/identity", server_url());
+
+    // Mock External Account JSON
+    let auth = GcpAuthConfig {
+        credentials_path: Some("tests/data/external_account.json".to_string()),
+        api_key: None,
+        workload_identity_provider: None,
+        service_account_email: None,
+        skip_authentication: false,
+    };
+
+    // Override token URLs for testing
+    std::env::set_var("GOOGLE_OAUTH_TOKEN_URL", mock_sts_url);
+    std::env::set_var("GOOGLE_OIDC_IDENTITY_URL", mock_oidc_url);
+
+    let result = auth.build(Scope::LoggingWrite).await;
+    assert!(result.is_ok(), "Workload Identity Federation authentication should succeed with mocked response");
+}
+
 }

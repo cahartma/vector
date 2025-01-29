@@ -144,6 +144,7 @@ vrl = { version = "0.13.0", features = ["arbitrary", "cli", "test", "test_framew
 pin-project.workspace = true
 clap.workspace = true
 vrl.workspace = true
+google-cloud-auth = "0.17"
 
 # Internal libs
 dnsmsg-parser = { path = "lib/dnsmsg-parser", optional = true }

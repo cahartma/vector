@@ -201,7 +201,18 @@ impl_generate_config_from_default!(StackdriverConfig);
 #[typetag::serde(name = "gcp_stackdriver_logs")]
 impl SinkConfig for StackdriverConfig {
     async fn build(&self, cx: SinkContext) -> crate::Result<(VectorSink, Healthcheck)> {
-        let auth = self.auth.build(Scope::LoggingWrite).await?;
+        let auth = if let (Some(provider), Some(email)) = (
+            &self.auth.workload_identity_provider,
+            &self.auth.service_account_email,
+        ) {
+            info!("Using Workload Identity Federation authentication.");
+            GcpAuthenticator::with_external_account(provider, email).await?
+        } else {
+            info!("Using Service Account authentication.");
+            self.auth.build(Scope::LoggingWrite).await?
+        };
+
+        debug!("GCP authentication initialized successfully.");
 
         let request_builder = StackdriverLogsRequestBuilder {
             encoder: StackdriverLogsEncoder::new(
@@ -269,7 +280,15 @@ async fn healthcheck(client: HttpClient, auth: GcpAuthenticator, uri: Uri) -> cr
         .body(body)
         .unwrap();
 
-    auth.apply(&mut request);
+//     auth.apply(&mut request);
+
+    if let Some(token) = auth.token().await? {
+        request.headers_mut().insert(
+            "Authorization",
+            format!("Bearer {}", token).parse().unwrap(),
+        );
+    }
+
 
     let request = request.map(Body::from);
 
