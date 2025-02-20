@@ -12,7 +12,7 @@ The `main` branch is empty except for this file.  The branches used by various R
 | 5.9 | release-5.9 | v0.34.1 | Current |
 | 5.8 | release-5.8 | v0.28.1 | Current |
 | 5.7 | release-5.7 | v0.21.0 | EOL |
-| 5.6 | release-5.6 | v0.21.0 | Current |
+| 5.6 | release-5.6 | v0.21.0 | EOL |
 
 This project varies from the upstream with the following features:
 
