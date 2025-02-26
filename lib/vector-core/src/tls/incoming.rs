@@ -12,6 +12,7 @@ use futures::{future::BoxFuture, stream, FutureExt, Stream};
 use openssl::ssl::{Ssl, SslAcceptor, SslMethod, ErrorEx};
 use openssl::x509::X509;
 use snafu::ResultExt;
+use tonic::transport::server::Connected;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::{
     io::{self, AsyncRead, AsyncWrite, ReadBuf},
@@ -340,6 +341,21 @@ impl MaybeTlsIncomingStream<TcpStream> {
             };
         }
     }
+}
+
+impl Connected for MaybeTlsIncomingStream<TcpStream> {
+    // Quick fix
+    type ConnectInfo = ();
+    fn connect_info(&self) -> Self::ConnectInfo {}
+
+//     type ConnectInfo = TcpConnectInfo;
+//
+//     fn connect_info(&self) -> Self::ConnectInfo {
+//         TcpConnectInfo {
+//             local_addr: self.local_addr().ok(),
+//             remote_addr: self.peer_addr().ok(),
+//         }
+//     }
 }
 
 impl AsyncRead for MaybeTlsIncomingStream<TcpStream> {
