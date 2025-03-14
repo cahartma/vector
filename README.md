@@ -6,7 +6,7 @@ The `main` branch is empty except for this file.  The branches used by various R
 
 | Release | Branch | Vector Version | Status |
 | --------|--------|----------------|--------|
-| 6.2 | v0.37.1-rh | v0.37.1 | Pending |
+| 6.2 | v0.37.1-rh | v0.37.1 | Current |
 | 6.1 | v0.37.1-rh | v0.37.1 | Current |
 | 6.0 | v0.37.1-rh | v0.37.1 | Current |
 | 5.9 | release-5.9 | v0.34.1 | Current |
