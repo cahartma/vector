@@ -1,5 +1,9 @@
-use crate::{container::public_access_from_header, prelude::*};
+use crate::{
+    container::{public_access_from_header, PublicAccess},
+    prelude::*,
+};
 use azure_core::{date, headers::*, prelude::*, Method, RequestId, Response};
+use azure_storage::StoredAccessPolicyList;
 use time::OffsetDateTime;
 
 operation! {

@@ -1,13 +1,10 @@
-use crate::{
-    error::{ErrorKind, ResultExt},
-    from_json,
-    headers::Headers,
-    StatusCode,
-};
+use crate::error::{ErrorKind, ResultExt};
+use crate::headers::Headers;
+use crate::StatusCode;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
-use serde::de::DeserializeOwned;
-use std::{fmt::Debug, pin::Pin};
+use std::fmt::Debug;
+use std::pin::Pin;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) type PinnedStream = Pin<Box<dyn Stream<Item = crate::Result<Bytes>> + Send + Sync>>;
@@ -49,21 +46,6 @@ impl Response {
     pub fn into_body(self) -> ResponseBody {
         self.body
     }
-
-    pub async fn json<T>(self) -> crate::Result<T>
-    where
-        T: DeserializeOwned,
-    {
-        self.into_body().json().await
-    }
-
-    #[cfg(feature = "xml")]
-    pub async fn xml<T>(self) -> crate::Result<T>
-    where
-        T: DeserializeOwned,
-    {
-        self.into_body().xml().await
-    }
 }
 
 impl std::fmt::Debug for Response {
@@ -82,12 +64,6 @@ pub struct CollectedResponse {
     status: StatusCode,
     headers: Headers,
     body: Bytes,
-}
-
-impl AsRef<[u8]> for CollectedResponse {
-    fn as_ref(&self) -> &[u8] {
-        self.body.as_ref()
-    }
 }
 
 impl CollectedResponse {
@@ -121,21 +97,6 @@ impl CollectedResponse {
         let body = body.collect().await?;
         Ok(Self::new(status, headers, body))
     }
-
-    pub fn json<T>(&self) -> crate::Result<T>
-    where
-        T: DeserializeOwned,
-    {
-        from_json(&self.body)
-    }
-
-    #[cfg(feature = "xml")]
-    pub fn xml<T>(&self) -> crate::Result<T>
-    where
-        T: DeserializeOwned,
-    {
-        crate::xml::read_xml(&self.body)
-    }
 }
 
 /// A response body stream
@@ -168,23 +129,6 @@ impl ResponseBody {
                 "response body was not utf-8 like expected",
             )
             .map(ToOwned::to_owned)
-    }
-
-    pub async fn json<T>(self) -> crate::Result<T>
-    where
-        T: DeserializeOwned,
-    {
-        let body = self.collect().await?;
-        from_json(body)
-    }
-
-    #[cfg(feature = "xml")]
-    pub async fn xml<T>(self) -> crate::Result<T>
-    where
-        T: DeserializeOwned,
-    {
-        let body = self.collect().await?;
-        crate::xml::read_xml(&body)
     }
 }
 

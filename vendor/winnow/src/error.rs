@@ -698,20 +698,6 @@ impl<C> ContextError<C> {
         }
     }
 
-    /// Add more context
-    #[inline]
-    pub fn push(&mut self, context: C) {
-        #[cfg(feature = "alloc")]
-        self.context.push(context);
-    }
-
-    /// Add more context
-    #[inline]
-    pub fn extend<I: IntoIterator<Item = C>>(&mut self, context: I) {
-        #[cfg(feature = "alloc")]
-        self.context.extend(context);
-    }
-
     /// Access context from [`Parser::context`]
     #[inline]
     #[cfg(feature = "alloc")]
@@ -766,7 +752,8 @@ impl<C, I: Stream> AddContext<I, C> for ContextError<C> {
         _token_start: &<I as Stream>::Checkpoint,
         context: C,
     ) -> Self {
-        self.push(context);
+        #[cfg(feature = "alloc")]
+        self.context.push(context);
         self
     }
 }

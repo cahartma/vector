@@ -8,13 +8,13 @@ mod device_code_responses;
 use azure_core::{
     content_type,
     error::{Error, ErrorKind},
-    from_json, headers, sleep, HttpClient, Method, Request, Response, Url,
+    headers, sleep, HttpClient, Method, Request, Response,
 };
 pub use device_code_responses::*;
 use futures::stream::unfold;
 use serde::Deserialize;
 use std::{borrow::Cow, pin::Pin, sync::Arc, time::Duration};
-use url::form_urlencoded;
+use url::{form_urlencoded, Url};
 
 /// Start the device authorization grant flow.
 /// The user has only 15 minutes to sign in (the usual value for `expires_in`).
@@ -36,14 +36,12 @@ where
         .finish();
 
     let rsp = post_form(http_client.clone(), url, encoded).await?;
-    let (rsp_status, rsp_headers, rsp_body) = rsp.deconstruct();
-    let rsp_body = rsp_body.collect().await?;
+    let rsp_status = rsp.status();
+    let rsp_body = rsp.into_body().collect().await?;
     if !rsp_status.is_success() {
-        return Err(
-            ErrorKind::http_response_from_parts(rsp_status, &rsp_headers, &rsp_body).into_error(),
-        );
+        return Err(ErrorKind::http_response_from_body(rsp_status, &rsp_body).into_error());
     }
-    let device_code_response: DeviceCodePhaseOneResponse = from_json(&rsp_body)?;
+    let device_code_response: DeviceCodePhaseOneResponse = serde_json::from_slice(&rsp_body)?;
 
     // we need to capture some variables that will be useful in
     // the second phase (the client, the tenant_id and the client_id)
@@ -133,14 +131,20 @@ impl<'a> DeviceCodePhaseOneResponse<'a> {
                                     Err(e) => return Some((Err(e), NextState::Finish)),
                                 };
                                 if rsp_status.is_success() {
-                                    match from_json::<_, DeviceCodeAuthorization>(&rsp_body) {
+                                    match serde_json::from_slice::<DeviceCodeAuthorization>(
+                                        &rsp_body,
+                                    ) {
                                         Ok(authorization) => {
                                             Some((Ok(authorization), NextState::Finish))
                                         }
-                                        Err(error) => Some((Err(error), NextState::Finish)),
+                                        Err(error) => {
+                                            Some((Err(Error::from(error)), NextState::Finish))
+                                        }
                                     }
                                 } else {
-                                    match from_json::<_, DeviceCodeErrorResponse>(&rsp_body) {
+                                    match serde_json::from_slice::<DeviceCodeErrorResponse>(
+                                        &rsp_body,
+                                    ) {
                                         Ok(error_rsp) => {
                                             let next_state =
                                                 if error_rsp.error == "authorization_pending" {
@@ -153,7 +157,9 @@ impl<'a> DeviceCodePhaseOneResponse<'a> {
                                                 next_state,
                                             ))
                                         }
-                                        Err(error) => Some((Err(error), NextState::Finish)),
+                                        Err(error) => {
+                                            Some((Err(Error::from(error)), NextState::Finish))
+                                        }
                                     }
                                 }
                             }

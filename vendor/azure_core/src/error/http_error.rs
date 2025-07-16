@@ -1,17 +1,13 @@
-use crate::{
-    content_type, from_json,
-    headers::{self, Headers},
-    Response, StatusCode,
-};
+use crate::{headers, Response, StatusCode};
 use bytes::Bytes;
-use serde::Deserialize;
+use std::collections::HashMap;
 
 /// An unsuccessful HTTP response
 #[derive(Debug)]
 pub struct HttpError {
     status: StatusCode,
     details: ErrorDetails,
-    headers: Headers,
+    headers: std::collections::HashMap<String, String>,
     body: Bytes,
 }
 
@@ -20,8 +16,14 @@ impl HttpError {
     ///
     /// This does not check whether the response was a success and should only be used with unsuccessful responses.
     pub async fn new(response: Response) -> Self {
-        let (status, headers, body) = response.deconstruct();
-        let body = body
+        let status = response.status();
+        let headers: HashMap<String, String> = response
+            .headers()
+            .iter()
+            .map(|(name, value)| (name.as_str().to_owned(), value.as_str().to_owned()))
+            .collect();
+        let body = response
+            .into_body()
             .collect()
             .await
             .unwrap_or_else(|_| Bytes::from_static(b"<ERROR COLLECTING BODY>"));
@@ -68,15 +70,11 @@ impl std::fmt::Display for HttpError {
         write!(f, "{tab}Body: \"{:?}\",{newline}", self.body)?;
         write!(f, "{tab}Headers: [{newline}")?;
         // TODO: sanitize headers
-        for (k, v) in self.headers.iter() {
-            write!(
-                f,
-                "{tab}{tab}{k}:{v}{newline}",
-                k = k.as_str(),
-                v = v.as_str()
-            )?;
+        for (k, v) in &self.headers {
+            write!(f, "{tab}{tab}{k}:{v}{newline}")?;
         }
         write!(f, "{tab}],{newline}}}{newline}")?;
+
         Ok(())
     }
 }
@@ -90,87 +88,39 @@ struct ErrorDetails {
 }
 
 impl ErrorDetails {
-    fn new(headers: &Headers, body: &[u8]) -> Self {
-        let header_err_code = get_error_code_from_header(headers);
-        let content_type = headers.get_optional_str(&headers::CONTENT_TYPE);
-        let (body_err_code, body_err_message) =
-            get_error_code_message_from_body(body, content_type);
-
-        let code = header_err_code.or(body_err_code);
-        Self {
-            code,
-            message: body_err_message,
-        }
+    fn new(headers: &HashMap<String, String>, body: &[u8]) -> Self {
+        let mut code = get_error_code_from_header(headers);
+        code = code.or_else(|| get_error_code_from_body(body));
+        let message = get_error_message_from_body(body);
+        Self { code, message }
     }
 }
 
 /// Gets the error code if it's present in the headers
 ///
 /// For more info, see [here](https://github.com/microsoft/api-guidelines/blob/vNext/azure/Guidelines.md#handling-errors)
-pub(crate) fn get_error_code_from_header(headers: &Headers) -> Option<String> {
-    headers.get_optional_string(&headers::ERROR_CODE)
+fn get_error_code_from_header(headers: &HashMap<String, String>) -> Option<String> {
+    headers.get(headers::ERROR_CODE.as_str()).cloned()
 }
 
-#[derive(Deserialize)]
-struct NestedError {
-    #[serde(alias = "Message")]
-    message: Option<String>,
-    #[serde(alias = "Code")]
-    code: Option<String>,
-}
-
-/// Error from a response body, aliases are set because XML responses follow different case-ing
-#[derive(Deserialize)]
-struct ErrorBody {
-    #[serde(alias = "Error")]
-    error: Option<NestedError>,
-    #[serde(alias = "Message")]
-    message: Option<String>,
-    #[serde(alias = "Code")]
-    code: Option<String>,
-}
-
-impl ErrorBody {
-    /// Deconstructs self into error (code, message)
-    ///
-    /// The nested errors fields take precedence over those in the root of the structure
-    fn into_code_message(self) -> (Option<String>, Option<String>) {
-        let (nested_code, nested_message) = self
-            .error
-            .map(|nested_error| (nested_error.code, nested_error.message))
-            .unwrap_or((None, None));
-        (nested_code.or(self.code), nested_message.or(self.message))
-    }
-}
-
-/// Gets the error code and message from the body based on the specified content_type
-/// Support for xml decoding is dependent on the 'xml' feature flag
+/// Gets the error code if it's present in the body
 ///
-/// Assumes JSON if unspecified/inconclusive to maintain old behaviour
-/// [#1275](https://github.com/Azure/azure-sdk-for-rust/issues/1275)
 /// For more info, see [here](https://github.com/microsoft/api-guidelines/blob/vNext/azure/Guidelines.md#handling-errors)
-pub(crate) fn get_error_code_message_from_body(
-    body: &[u8],
-    content_type: Option<&str>,
-) -> (Option<String>, Option<String>) {
-    let err_body: Option<ErrorBody> = if content_type
-        .is_some_and(|ctype| ctype == content_type::APPLICATION_XML.as_str())
-    {
-        #[cfg(feature = "xml")]
-        {
-            crate::xml::read_xml(body).ok()
-        }
-        #[cfg(not(feature = "xml"))]
-        {
-            tracing::warn!("encountered XML response but the 'xml' feature flag was not specified");
-            None
-        }
-    } else {
-        // keep old default of assuming JSON
-        from_json(body).ok()
-    };
+pub(crate) fn get_error_code_from_body(body: &[u8]) -> Option<String> {
+    let json = serde_json::from_slice::<serde_json::Value>(body).ok()?;
+    let nested = || json.get("error")?.get("code")?.as_str();
+    let top_level = || json.get("code")?.as_str();
+    let code = nested().or_else(top_level);
+    code.map(ToOwned::to_owned)
+}
 
-    err_body
-        .map(ErrorBody::into_code_message)
-        .unwrap_or((None, None))
+/// Gets the error message if it's present in the body
+///
+/// For more info, see [here](https://github.com/microsoft/api-guidelines/blob/vNext/azure/Guidelines.md#handling-errors)
+pub(crate) fn get_error_message_from_body(body: &[u8]) -> Option<String> {
+    let json = serde_json::from_slice::<serde_json::Value>(body).ok()?;
+    let nested = || json.get("error")?.get("message")?.as_str();
+    let top_level = || json.get("message")?.as_str();
+    let code = nested().or_else(top_level);
+    code.map(ToOwned::to_owned)
 }

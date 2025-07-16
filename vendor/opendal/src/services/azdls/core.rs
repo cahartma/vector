@@ -15,14 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fmt;
-use std::fmt::Debug;
-use std::fmt::Formatter;
-use std::fmt::Write;
-
-use http::header::CONTENT_DISPOSITION;
 use http::header::CONTENT_LENGTH;
 use http::header::CONTENT_TYPE;
+use http::header::{CONTENT_DISPOSITION, IF_NONE_MATCH};
 use http::HeaderName;
 use http::HeaderValue;
 use http::Request;
@@ -30,6 +25,10 @@ use http::Response;
 use reqsign::AzureStorageCredential;
 use reqsign::AzureStorageLoader;
 use reqsign::AzureStorageSigner;
+use std::fmt;
+use std::fmt::Debug;
+use std::fmt::Formatter;
+use std::sync::Arc;
 
 use crate::raw::*;
 use crate::*;
@@ -38,11 +37,11 @@ const X_MS_RENAME_SOURCE: &str = "x-ms-rename-source";
 const X_MS_VERSION: &str = "x-ms-version";
 
 pub struct AzdlsCore {
+    pub info: Arc<AccessorInfo>,
     pub filesystem: String,
     pub root: String,
     pub endpoint: String,
 
-    pub client: HttpClient,
     pub loader: AzureStorageLoader,
     pub signer: AzureStorageSigner,
 }
@@ -91,17 +90,13 @@ impl AzdlsCore {
     }
 
     #[inline]
-    pub async fn send(&self, req: Request<AsyncBody>) -> Result<Response<IncomingAsyncBody>> {
-        self.client.send(req).await
+    pub async fn send(&self, req: Request<Buffer>) -> Result<Response<Buffer>> {
+        self.info.http_client().send(req).await
     }
 }
 
 impl AzdlsCore {
-    pub async fn azdls_read(
-        &self,
-        path: &str,
-        range: BytesRange,
-    ) -> Result<Response<IncomingAsyncBody>> {
+    pub async fn azdls_read(&self, path: &str, range: BytesRange) -> Result<Response<HttpBody>> {
         let p = build_abs_path(&self.root, path);
 
         let url = format!(
@@ -114,25 +109,13 @@ impl AzdlsCore {
         let mut req = Request::get(&url);
 
         if !range.is_full() {
-            // azblob doesn't support read with suffix range.
-            //
-            // ref: https://learn.microsoft.com/en-us/rest/api/storageservices/specifying-the-range-header-for-blob-service-operations
-            if range.offset().is_none() && range.size().is_some() {
-                return Err(Error::new(
-                    ErrorKind::Unsupported,
-                    "azblob doesn't support read with suffix range",
-                ));
-            }
-
             req = req.header(http::header::RANGE, range.to_header());
         }
 
-        let mut req = req
-            .body(AsyncBody::Empty)
-            .map_err(new_request_build_error)?;
+        let mut req = req.body(Buffer::new()).map_err(new_request_build_error)?;
 
         self.sign(&mut req).await?;
-        self.send(req).await
+        self.info.http_client().fetch(req).await
     }
 
     /// resource should be one of `file` or `directory`
@@ -143,8 +126,8 @@ impl AzdlsCore {
         path: &str,
         resource: &str,
         args: &OpWrite,
-        body: AsyncBody,
-    ) -> Result<Request<AsyncBody>> {
+        body: Buffer,
+    ) -> Result<Request<Buffer>> {
         let p = build_abs_path(&self.root, path)
             .trim_end_matches('/')
             .to_string();
@@ -169,13 +152,21 @@ impl AzdlsCore {
             req = req.header(CONTENT_DISPOSITION, pos)
         }
 
+        if args.if_not_exists() {
+            req = req.header(IF_NONE_MATCH, "*")
+        }
+
+        if let Some(v) = args.if_none_match() {
+            req = req.header(IF_NONE_MATCH, v)
+        }
+
         // Set body
         let req = req.body(body).map_err(new_request_build_error)?;
 
         Ok(req)
     }
 
-    pub async fn azdls_rename(&self, from: &str, to: &str) -> Result<Response<IncomingAsyncBody>> {
+    pub async fn azdls_rename(&self, from: &str, to: &str) -> Result<Response<Buffer>> {
         let source = build_abs_path(&self.root, from);
         let target = build_abs_path(&self.root, to);
 
@@ -192,7 +183,7 @@ impl AzdlsCore {
                 format!("/{}/{}", self.filesystem, percent_encode_path(&source)),
             )
             .header(CONTENT_LENGTH, 0)
-            .body(AsyncBody::Empty)
+            .body(Buffer::new())
             .map_err(new_request_build_error)?;
 
         self.sign(&mut req).await?;
@@ -205,8 +196,8 @@ impl AzdlsCore {
         path: &str,
         size: Option<u64>,
         position: u64,
-        body: AsyncBody,
-    ) -> Result<Request<AsyncBody>> {
+        body: Buffer,
+    ) -> Result<Request<Buffer>> {
         let p = build_abs_path(&self.root, path);
 
         // - close: Make this is the final action to this file.
@@ -231,7 +222,7 @@ impl AzdlsCore {
         Ok(req)
     }
 
-    pub async fn azdls_get_properties(&self, path: &str) -> Result<Response<IncomingAsyncBody>> {
+    pub async fn azdls_get_properties(&self, path: &str) -> Result<Response<Buffer>> {
         let p = build_abs_path(&self.root, path)
             .trim_end_matches('/')
             .to_string();
@@ -245,15 +236,13 @@ impl AzdlsCore {
 
         let req = Request::head(&url);
 
-        let mut req = req
-            .body(AsyncBody::Empty)
-            .map_err(new_request_build_error)?;
+        let mut req = req.body(Buffer::new()).map_err(new_request_build_error)?;
 
         self.sign(&mut req).await?;
-        self.client.send(req).await
+        self.info.http_client().send(req).await
     }
 
-    pub async fn azdls_delete(&self, path: &str) -> Result<Response<IncomingAsyncBody>> {
+    pub async fn azdls_delete(&self, path: &str) -> Result<Response<Buffer>> {
         let p = build_abs_path(&self.root, path)
             .trim_end_matches('/')
             .to_string();
@@ -267,9 +256,7 @@ impl AzdlsCore {
 
         let req = Request::delete(&url);
 
-        let mut req = req
-            .body(AsyncBody::Empty)
-            .map_err(new_request_build_error)?;
+        let mut req = req.body(Buffer::new()).map_err(new_request_build_error)?;
 
         self.sign(&mut req).await?;
         self.send(req).await
@@ -280,39 +267,33 @@ impl AzdlsCore {
         path: &str,
         continuation: &str,
         limit: Option<usize>,
-    ) -> Result<Response<IncomingAsyncBody>> {
+    ) -> Result<Response<Buffer>> {
         let p = build_abs_path(&self.root, path)
             .trim_end_matches('/')
             .to_string();
 
-        let mut url = format!(
-            "{}/{}?resource=filesystem&recursive=false",
-            self.endpoint, self.filesystem
-        );
+        let mut url = QueryPairsWriter::new(&format!("{}/{}", self.endpoint, self.filesystem))
+            .push("resource", "filesystem")
+            .push("recursive", "false");
         if !p.is_empty() {
-            write!(url, "&directory={}", percent_encode_path(&p))
-                .expect("write into string must succeed");
+            url = url.push("directory", &percent_encode_path(&p));
         }
         if let Some(limit) = limit {
-            write!(url, "&maxResults={limit}").expect("write into string must succeed");
+            url = url.push("maxResults", &limit.to_string());
         }
         if !continuation.is_empty() {
-            write!(url, "&continuation={}", percent_encode_path(continuation))
-                .expect("write into string must succeed");
+            url = url.push("continuation", &percent_encode_path(continuation));
         }
 
-        let mut req = Request::get(&url)
-            .body(AsyncBody::Empty)
+        let mut req = Request::get(url.finish())
+            .body(Buffer::new())
             .map_err(new_request_build_error)?;
 
         self.sign(&mut req).await?;
         self.send(req).await
     }
 
-    pub async fn azdls_ensure_parent_path(
-        &self,
-        path: &str,
-    ) -> Result<Option<Response<IncomingAsyncBody>>> {
+    pub async fn azdls_ensure_parent_path(&self, path: &str) -> Result<Option<Response<Buffer>>> {
         let abs_target_path = path.trim_end_matches('/').to_string();
         let abs_target_path = abs_target_path.as_str();
         let mut parts: Vec<&str> = abs_target_path
@@ -330,7 +311,7 @@ impl AzdlsCore {
                 &parent_path,
                 "directory",
                 &OpWrite::default(),
-                AsyncBody::Empty,
+                Buffer::new(),
             )?;
 
             self.sign(&mut req).await?;

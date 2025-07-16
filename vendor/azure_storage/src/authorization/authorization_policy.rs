@@ -1,15 +1,13 @@
 use crate::{clients::ServiceType, StorageCredentials, StorageCredentialsInner};
 use azure_core::{
-    auth::Secret,
     error::{ErrorKind, ResultExt},
     headers::*,
-    hmac::hmac_sha256,
-    Context, Method, Policy, PolicyResult, Request, Url,
+    Context, Method, Policy, PolicyResult, Request,
 };
 use std::{borrow::Cow, ops::Deref, sync::Arc};
-use tracing::trace;
+use url::Url;
 
-const STORAGE_TOKEN_SCOPE: &str = "https://storage.azure.com/.default";
+const STORAGE_TOKEN_SCOPE: &str = "https://storage.azure.com/";
 
 #[derive(Debug, Clone)]
 pub struct AuthorizationPolicy {
@@ -40,7 +38,7 @@ impl Policy for AuthorizationPolicy {
 
         // lock the credentials within a scope so that it is released as soon as possible
         {
-            let creds = self.credentials.0.read().await;
+            let creds = self.credentials.0.lock().await;
 
             match creds.deref() {
                 StorageCredentialsInner::Key(account, key) => {
@@ -67,11 +65,11 @@ impl Policy for AuthorizationPolicy {
                     }
                 }
                 StorageCredentialsInner::BearerToken(token) => {
-                    request.insert_header(AUTHORIZATION, format!("Bearer {}", token.secret()));
+                    request.insert_header(AUTHORIZATION, format!("Bearer {token}"));
                 }
                 StorageCredentialsInner::TokenCredential(token_credential) => {
                     let bearer_token = token_credential
-                        .get_token(&[STORAGE_TOKEN_SCOPE])
+                        .get_token(STORAGE_TOKEN_SCOPE)
                         .await
                         .context(ErrorKind::Credential, "failed to get bearer token")?;
 
@@ -93,11 +91,11 @@ fn generate_authorization(
     u: &Url,
     method: Method,
     account: &str,
-    key: &Secret,
+    key: &str,
     service_type: ServiceType,
 ) -> azure_core::Result<String> {
     let str_to_sign = string_to_sign(h, u, method, account, service_type);
-    let auth = hmac_sha256(&str_to_sign, key).context(
+    let auth = crate::hmac::sign(&str_to_sign, key).context(
         azure_core::error::ErrorKind::Credential,
         "failed to sign the hmac",
     )?;

@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.81"
 name = "vrl"
-version = "0.23.0"
+version = "0.24.0"
 authors = ["Vector Contributors <vector@datadoghq.com>"]
 build = "build.rs"
 autolib = false
@@ -157,7 +157,7 @@ stdlib = [
     "dep:aes-siv",
     "dep:base16",
     "dep:base62",
-    "dep:base64",
+    "dep:base64-simd",
     "dep:cbc",
     "dep:cfb-mode",
     "dep:chacha20poly1305",
@@ -170,7 +170,6 @@ stdlib = [
     "dep:crypto_secretbox",
     "dep:csv",
     "dep:ctr",
-    "dep:data-encoding",
     "dep:digest",
     "dep:domain",
     "dep:dns-lookup",
@@ -283,8 +282,8 @@ optional = true
 version = "2.2.1"
 optional = true
 
-[dependencies.base64]
-version = "0.22"
+[dependencies.base64-simd]
+version = "0.8"
 optional = true
 
 [dependencies.bytes]
@@ -369,10 +368,6 @@ optional = true
 version = "0.9"
 optional = true
 
-[dependencies.data-encoding]
-version = "2"
-optional = true
-
 [dependencies.digest]
 version = "0.10"
 optional = true
@@ -396,8 +391,8 @@ optional = true
 default-features = false
 
 [dependencies.flate2]
-version = "1"
-features = ["default"]
+version = "1.1.1"
+features = ["zlib-rs"]
 optional = true
 default-features = false
 

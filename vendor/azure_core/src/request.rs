@@ -1,12 +1,10 @@
+use crate::headers::{AsHeaders, Headers};
+use crate::Method;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::SeekableStream;
-use crate::{
-    headers::{AsHeaders, Headers},
-    to_json, Method, Url,
-};
 use bytes::Bytes;
-use serde::Serialize;
 use std::fmt::Debug;
+use url::Url;
 
 /// An HTTP Body.
 #[derive(Debug, Clone)]
@@ -115,14 +113,6 @@ impl Request {
 
     pub fn body(&self) -> &Body {
         &self.body
-    }
-
-    pub fn set_json<T>(&mut self, data: &T) -> crate::Result<()>
-    where
-        T: ?Sized + Serialize,
-    {
-        self.set_body(to_json(data)?);
-        Ok(())
     }
 
     pub fn set_body(&mut self, body: impl Into<Body>) {

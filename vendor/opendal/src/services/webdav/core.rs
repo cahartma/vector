@@ -15,15 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::error::parse_error;
-use crate::raw::*;
-use crate::*;
 use bytes::Bytes;
-use http::{header, Request, Response, StatusCode};
+use http::header;
+use http::Request;
+use http::Response;
+use http::StatusCode;
 use serde::Deserialize;
 use std::collections::VecDeque;
 use std::fmt;
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
+use std::fmt::Formatter;
+use std::sync::Arc;
+
+use super::error::parse_error;
+use crate::raw::*;
+use crate::*;
 
 /// The request to query all properties of a file or directory.
 ///
@@ -63,13 +69,11 @@ static HEADER_DESTINATION: &str = "Destination";
 static HEADER_OVERWRITE: &str = "Overwrite";
 
 pub struct WebdavCore {
+    pub info: Arc<AccessorInfo>,
     pub endpoint: String,
     pub server_path: String,
     pub root: String,
-    pub disable_copy: bool,
     pub authorization: Option<String>,
-
-    pub client: HttpClient,
 }
 
 impl Debug for WebdavCore {
@@ -102,17 +106,17 @@ impl WebdavCore {
         req = req.header(HEADER_DEPTH, "0");
 
         let req = req
-            .body(AsyncBody::Bytes(Bytes::from(PROPFIND_REQUEST)))
+            .body(Buffer::from(Bytes::from(PROPFIND_REQUEST)))
             .map_err(new_request_build_error)?;
 
-        let resp = self.client.send(req).await?;
+        let resp = self.info.http_client().send(req).await?;
         if !resp.status().is_success() {
-            return Err(parse_error(resp).await?);
+            return Err(parse_error(resp));
         }
 
-        let bs = resp.into_body().bytes().await?;
+        let bs = resp.into_body();
 
-        let result: Multistatus = deserialize_multistatus(&bs)?;
+        let result: Multistatus = deserialize_multistatus(&bs.to_bytes())?;
         let propfind_resp = result.response.first().ok_or_else(|| {
             Error::new(
                 ErrorKind::NotFound,
@@ -127,8 +131,9 @@ impl WebdavCore {
     pub async fn webdav_get(
         &self,
         path: &str,
-        args: OpRead,
-    ) -> Result<Response<IncomingAsyncBody>> {
+        range: BytesRange,
+        _: &OpRead,
+    ) -> Result<Response<HttpBody>> {
         let path = build_rooted_abs_path(&self.root, path);
         let url: String = format!("{}{}", self.endpoint, percent_encode_path(&path));
 
@@ -138,16 +143,13 @@ impl WebdavCore {
             req = req.header(header::AUTHORIZATION, auth.clone())
         }
 
-        let range = args.range();
         if !range.is_full() {
             req = req.header(header::RANGE, range.to_header());
         }
 
-        let req = req
-            .body(AsyncBody::Empty)
-            .map_err(new_request_build_error)?;
+        let req = req.body(Buffer::new()).map_err(new_request_build_error)?;
 
-        self.client.send(req).await
+        self.info.http_client().fetch(req).await
     }
 
     pub async fn webdav_put(
@@ -155,8 +157,8 @@ impl WebdavCore {
         path: &str,
         size: Option<u64>,
         args: &OpWrite,
-        body: AsyncBody,
-    ) -> Result<Response<IncomingAsyncBody>> {
+        body: Buffer,
+    ) -> Result<Response<Buffer>> {
         let path = build_rooted_abs_path(&self.root, path);
         let url = format!("{}{}", self.endpoint, percent_encode_path(&path));
 
@@ -180,10 +182,10 @@ impl WebdavCore {
 
         let req = req.body(body).map_err(new_request_build_error)?;
 
-        self.client.send(req).await
+        self.info.http_client().send(req).await
     }
 
-    pub async fn webdav_delete(&self, path: &str) -> Result<Response<IncomingAsyncBody>> {
+    pub async fn webdav_delete(&self, path: &str) -> Result<Response<Buffer>> {
         let path = build_rooted_abs_path(&self.root, path);
         let url = format!("{}{}", self.endpoint, percent_encode_path(&path));
 
@@ -193,14 +195,12 @@ impl WebdavCore {
             req = req.header(header::AUTHORIZATION, auth.clone())
         }
 
-        let req = req
-            .body(AsyncBody::Empty)
-            .map_err(new_request_build_error)?;
+        let req = req.body(Buffer::new()).map_err(new_request_build_error)?;
 
-        self.client.send(req).await
+        self.info.http_client().send(req).await
     }
 
-    pub async fn webdav_copy(&self, from: &str, to: &str) -> Result<Response<IncomingAsyncBody>> {
+    pub async fn webdav_copy(&self, from: &str, to: &str) -> Result<Response<Buffer>> {
         // Check if source file exists.
         let _ = self.webdav_stat(from).await?;
         // Make sure target's dir is exist.
@@ -221,14 +221,12 @@ impl WebdavCore {
         req = req.header(HEADER_DESTINATION, target_uri);
         req = req.header(HEADER_OVERWRITE, "T");
 
-        let req = req
-            .body(AsyncBody::Empty)
-            .map_err(new_request_build_error)?;
+        let req = req.body(Buffer::new()).map_err(new_request_build_error)?;
 
-        self.client.send(req).await
+        self.info.http_client().send(req).await
     }
 
-    pub async fn webdav_move(&self, from: &str, to: &str) -> Result<Response<IncomingAsyncBody>> {
+    pub async fn webdav_move(&self, from: &str, to: &str) -> Result<Response<Buffer>> {
         // Check if source file exists.
         let _ = self.webdav_stat(from).await?;
         // Make sure target's dir is exist.
@@ -249,18 +247,12 @@ impl WebdavCore {
         req = req.header(HEADER_DESTINATION, target_uri);
         req = req.header(HEADER_OVERWRITE, "T");
 
-        let req = req
-            .body(AsyncBody::Empty)
-            .map_err(new_request_build_error)?;
+        let req = req.body(Buffer::new()).map_err(new_request_build_error)?;
 
-        self.client.send(req).await
+        self.info.http_client().send(req).await
     }
 
-    pub async fn webdav_list(
-        &self,
-        path: &str,
-        args: &OpList,
-    ) -> Result<Response<IncomingAsyncBody>> {
+    pub async fn webdav_list(&self, path: &str, args: &OpList) -> Result<Response<Buffer>> {
         let path = build_rooted_abs_path(&self.root, path);
         let url = format!("{}{}", self.endpoint, percent_encode_path(&path));
 
@@ -279,10 +271,10 @@ impl WebdavCore {
         }
 
         let req = req
-            .body(AsyncBody::Bytes(Bytes::from(PROPFIND_REQUEST)))
+            .body(Buffer::from(Bytes::from(PROPFIND_REQUEST)))
             .map_err(new_request_build_error)?;
 
-        self.client.send(req).await
+        self.info.http_client().send(req).await
     }
 
     /// Create dir recursively for given path.
@@ -298,7 +290,7 @@ impl WebdavCore {
 
         loop {
             match self.webdav_stat_rooted_abs_path(path).await {
-                // Dir is exist, break the loop.
+                // Dir exists, break the loop.
                 Ok(_) => {
                     break;
                 }
@@ -336,11 +328,9 @@ impl WebdavCore {
             req = req.header(header::AUTHORIZATION, auth.clone())
         }
 
-        let req = req
-            .body(AsyncBody::Empty)
-            .map_err(new_request_build_error)?;
+        let req = req.body(Buffer::new()).map_err(new_request_build_error)?;
 
-        let resp = self.client.send(req).await?;
+        let resp = self.info.http_client().send(req).await?;
         let status = resp.status();
 
         match status {
@@ -351,10 +341,10 @@ impl WebdavCore {
             // The MKCOL method can only be performed on a deleted or non-existent resource.
             // This error means the directory already exists which is allowed by create_dir.
             | StatusCode::METHOD_NOT_ALLOWED => {
-                resp.into_body().consume().await?;
+
                 Ok(())
             }
-            _ => Err(parse_error(resp).await?),
+            _ => Err(parse_error(resp)),
         }
     }
 }
@@ -392,7 +382,7 @@ pub fn parse_propstat(propstat: &Propstat) -> Result<Metadata> {
         if code >= 400 {
             return Err(Error::new(
                 ErrorKind::Unexpected,
-                &format!("propfind response is unexpected: {} {}", code, text),
+                format!("propfind response is unexpected: {} {}", code, text),
             ));
         }
     }
@@ -420,7 +410,7 @@ pub fn parse_propstat(propstat: &Propstat) -> Result<Metadata> {
     m.set_last_modified(parse_datetime_from_rfc2822(getlastmodified)?);
 
     // the storage services have returned all the properties
-    Ok(m.with_metakey(Metakey::Complete))
+    Ok(m)
 }
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone, Default)]

@@ -15,24 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use async_trait::async_trait;
+use http::Response;
 use http::StatusCode;
 use log::debug;
 use reqsign::AzureStorageConfig;
 use reqsign::AzureStorageLoader;
 use reqsign::AzureStorageSigner;
-use serde::Deserialize;
 
 use super::core::AzdlsCore;
+use super::delete::AzdlsDeleter;
 use super::error::parse_error;
 use super::lister::AzdlsLister;
-use super::writer::{AzdlsWriter, AzdlsWriters};
+use super::writer::AzdlsWriter;
+use super::writer::AzdlsWriters;
 use crate::raw::*;
+use crate::services::AzdlsConfig;
 use crate::*;
 
 /// Known endpoint suffix Azure Data Lake Storage Gen2 URI syntax.
@@ -45,32 +46,15 @@ const KNOWN_AZDLS_ENDPOINT_SUFFIX: &[&str] = &[
     "dfs.core.chinacloudapi.cn",
 ];
 
-/// Azure Data Lake Storage Gen2 Support.
-#[derive(Default, Deserialize, Clone)]
-pub struct AzdlsConfig {
-    root: Option<String>,
-    filesystem: String,
-    endpoint: Option<String>,
-    account_name: Option<String>,
-    account_key: Option<String>,
-}
+impl Configurator for AzdlsConfig {
+    type Builder = AzdlsBuilder;
 
-impl Debug for AzdlsConfig {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let mut ds = f.debug_struct("AzdlsConfig");
-
-        ds.field("root", &self.root);
-        ds.field("filesystem", &self.filesystem);
-        ds.field("endpoint", &self.endpoint);
-
-        if self.account_name.is_some() {
-            ds.field("account_name", &"<redacted>");
+    #[allow(deprecated)]
+    fn into_builder(self) -> Self::Builder {
+        AzdlsBuilder {
+            config: self,
+            http_client: None,
         }
-        if self.account_key.is_some() {
-            ds.field("account_key", &"<redacted>");
-        }
-
-        ds.finish()
     }
 }
 
@@ -79,6 +63,8 @@ impl Debug for AzdlsConfig {
 #[derive(Default, Clone)]
 pub struct AzdlsBuilder {
     config: AzdlsConfig,
+
+    #[deprecated(since = "0.53.0", note = "Use `Operator::update_http_client` instead")]
     http_client: Option<HttpClient>,
 }
 
@@ -96,16 +82,18 @@ impl AzdlsBuilder {
     /// Set root of this backend.
     ///
     /// All operations will happen under this root.
-    pub fn root(&mut self, root: &str) -> &mut Self {
-        if !root.is_empty() {
-            self.config.root = Some(root.to_string())
-        }
+    pub fn root(mut self, root: &str) -> Self {
+        self.config.root = if root.is_empty() {
+            None
+        } else {
+            Some(root.to_string())
+        };
 
         self
     }
 
     /// Set filesystem name of this backend.
-    pub fn filesystem(&mut self, filesystem: &str) -> &mut Self {
+    pub fn filesystem(mut self, filesystem: &str) -> Self {
         self.config.filesystem = filesystem.to_string();
 
         self
@@ -117,7 +105,7 @@ impl AzdlsBuilder {
     ///
     /// - Azblob: `https://accountname.blob.core.windows.net`
     /// - Azurite: `http://127.0.0.1:10000/devstoreaccount1`
-    pub fn endpoint(&mut self, endpoint: &str) -> &mut Self {
+    pub fn endpoint(mut self, endpoint: &str) -> Self {
         if !endpoint.is_empty() {
             // Trim trailing `/` so that we can accept `http://127.0.0.1:9000/`
             self.config.endpoint = Some(endpoint.trim_end_matches('/').to_string());
@@ -130,7 +118,7 @@ impl AzdlsBuilder {
     ///
     /// - If account_name is set, we will take user's input first.
     /// - If not, we will try to load it from environment.
-    pub fn account_name(&mut self, account_name: &str) -> &mut Self {
+    pub fn account_name(mut self, account_name: &str) -> Self {
         if !account_name.is_empty() {
             self.config.account_name = Some(account_name.to_string());
         }
@@ -142,7 +130,7 @@ impl AzdlsBuilder {
     ///
     /// - If account_key is set, we will take user's input first.
     /// - If not, we will try to load it from environment.
-    pub fn account_key(&mut self, account_key: &str) -> &mut Self {
+    pub fn account_key(mut self, account_key: &str) -> Self {
         if !account_key.is_empty() {
             self.config.account_key = Some(account_key.to_string());
         }
@@ -156,20 +144,22 @@ impl AzdlsBuilder {
     ///
     /// This API is part of OpenDAL's Raw API. `HttpClient` could be changed
     /// during minor updates.
-    pub fn http_client(&mut self, client: HttpClient) -> &mut Self {
+    #[deprecated(since = "0.53.0", note = "Use `Operator::update_http_client` instead")]
+    #[allow(deprecated)]
+    pub fn http_client(mut self, client: HttpClient) -> Self {
         self.http_client = Some(client);
         self
     }
 }
 
 impl Builder for AzdlsBuilder {
-    type Accessor = AzdlsBackend;
     const SCHEME: Scheme = Scheme::Azdls;
+    type Config = AzdlsConfig;
 
-    fn build(&mut self) -> Result<Self::Accessor> {
+    fn build(self) -> Result<impl Access> {
         debug!("backend build started: {:?}", &self);
 
-        let root = normalize_root(&self.config.root.take().unwrap_or_default());
+        let root = normalize_root(&self.config.root.unwrap_or_default());
         debug!("backend use root {}", root);
 
         // Handle endpoint, region and container name.
@@ -189,15 +179,6 @@ impl Builder for AzdlsBuilder {
         }?;
         debug!("backend use endpoint {}", &endpoint);
 
-        let client = if let Some(client) = self.http_client.take() {
-            client
-        } else {
-            HttpClient::new().map_err(|err| {
-                err.with_operation("Builder::build")
-                    .with_context("service", Scheme::Azdls)
-            })?
-        };
-
         let config_loader = AzureStorageConfig {
             account_name: self
                 .config
@@ -211,28 +192,61 @@ impl Builder for AzdlsBuilder {
 
         let cred_loader = AzureStorageLoader::new(config_loader);
         let signer = AzureStorageSigner::new();
-
-        debug!("backend build finished: {:?}", &self);
         Ok(AzdlsBackend {
             core: Arc::new(AzdlsCore {
+                info: {
+                    let am = AccessorInfo::default();
+                    am.set_scheme(Scheme::Azdls)
+                        .set_root(&root)
+                        .set_name(filesystem)
+                        .set_native_capability(Capability {
+                            stat: true,
+                            stat_has_cache_control: true,
+                            stat_has_content_length: true,
+                            stat_has_content_type: true,
+                            stat_has_content_encoding: true,
+                            stat_has_content_range: true,
+                            stat_has_etag: true,
+                            stat_has_content_md5: true,
+                            stat_has_last_modified: true,
+                            stat_has_content_disposition: true,
+
+                            read: true,
+
+                            write: true,
+                            write_can_append: true,
+                            write_with_if_none_match: true,
+                            write_with_if_not_exists: true,
+
+                            create_dir: true,
+                            delete: true,
+                            rename: true,
+
+                            list: true,
+                            list_has_etag: true,
+                            list_has_content_length: true,
+                            list_has_last_modified: true,
+
+                            shared: true,
+
+                            ..Default::default()
+                        });
+
+                    // allow deprecated api here for compatibility
+                    #[allow(deprecated)]
+                    if let Some(client) = self.http_client {
+                        am.update_http_client(|_| client);
+                    }
+
+                    am.into()
+                },
                 filesystem: self.config.filesystem.clone(),
                 root,
                 endpoint,
-                client,
                 loader: cred_loader,
                 signer,
             }),
         })
-    }
-
-    fn from_map(map: HashMap<String, String>) -> Self {
-        let config = AzdlsConfig::deserialize(ConfigDeserializer::new(map))
-            .expect("config deserialize must succeed");
-
-        AzdlsBuilder {
-            config,
-            http_client: None,
-        }
     }
 }
 
@@ -242,39 +256,18 @@ pub struct AzdlsBackend {
     core: Arc<AzdlsCore>,
 }
 
-#[async_trait]
-impl Accessor for AzdlsBackend {
-    type Reader = IncomingAsyncBody;
+impl Access for AzdlsBackend {
+    type Reader = HttpBody;
     type Writer = AzdlsWriters;
     type Lister = oio::PageLister<AzdlsLister>;
+    type Deleter = oio::OneShotDeleter<AzdlsDeleter>;
     type BlockingReader = ();
     type BlockingWriter = ();
     type BlockingLister = ();
+    type BlockingDeleter = ();
 
-    fn info(&self) -> AccessorInfo {
-        let mut am = AccessorInfo::default();
-        am.set_scheme(Scheme::Azdls)
-            .set_root(&self.core.root)
-            .set_name(&self.core.filesystem)
-            .set_native_capability(Capability {
-                stat: true,
-
-                read: true,
-                read_can_next: true,
-                read_with_range: true,
-
-                write: true,
-                write_can_append: true,
-                create_dir: true,
-                delete: true,
-                rename: true,
-
-                list: true,
-
-                ..Default::default()
-            });
-
-        am
+    fn info(&self) -> Arc<AccessorInfo> {
+        self.core.info.clone()
     }
 
     async fn create_dir(&self, path: &str, _: OpCreateDir) -> Result<RpCreateDir> {
@@ -282,7 +275,7 @@ impl Accessor for AzdlsBackend {
             path,
             "directory",
             &OpWrite::default(),
-            AsyncBody::Empty,
+            Buffer::new(),
         )?;
 
         self.core.sign(&mut req).await?;
@@ -292,11 +285,8 @@ impl Accessor for AzdlsBackend {
         let status = resp.status();
 
         match status {
-            StatusCode::CREATED | StatusCode::OK => {
-                resp.into_body().consume().await?;
-                Ok(RpCreateDir::default())
-            }
-            _ => Err(parse_error(resp).await?),
+            StatusCode::CREATED | StatusCode::OK => Ok(RpCreateDir::default()),
+            _ => Err(parse_error(resp)),
         }
     }
 
@@ -309,7 +299,7 @@ impl Accessor for AzdlsBackend {
         let resp = self.core.azdls_get_properties(path).await?;
 
         if resp.status() != StatusCode::OK {
-            return Err(parse_error(resp).await?);
+            return Err(parse_error(resp));
         }
 
         let mut meta = parse_into_metadata(path, resp.headers())?;
@@ -350,21 +340,13 @@ impl Accessor for AzdlsBackend {
         let resp = self.core.azdls_read(path, args.range()).await?;
 
         let status = resp.status();
-
         match status {
-            StatusCode::OK | StatusCode::PARTIAL_CONTENT => {
-                let size = parse_content_length(resp.headers())?;
-                let range = parse_content_range(resp.headers())?;
-                Ok((
-                    RpRead::new().with_size(size).with_range(range),
-                    resp.into_body(),
-                ))
+            StatusCode::OK | StatusCode::PARTIAL_CONTENT => Ok((RpRead::new(), resp.into_body())),
+            _ => {
+                let (part, mut body) = resp.into_parts();
+                let buf = body.to_buffer().await?;
+                Err(parse_error(Response::from_parts(part, buf)))
             }
-            StatusCode::RANGE_NOT_SATISFIABLE => {
-                resp.into_body().consume().await?;
-                Ok((RpRead::new().with_size(Some(0)), IncomingAsyncBody::empty()))
-            }
-            _ => Err(parse_error(resp).await?),
         }
     }
 
@@ -378,15 +360,11 @@ impl Accessor for AzdlsBackend {
         Ok((RpWrite::default(), w))
     }
 
-    async fn delete(&self, path: &str, _: OpDelete) -> Result<RpDelete> {
-        let resp = self.core.azdls_delete(path).await?;
-
-        let status = resp.status();
-
-        match status {
-            StatusCode::OK | StatusCode::NOT_FOUND => Ok(RpDelete::default()),
-            _ => Err(parse_error(resp).await?),
-        }
+    async fn delete(&self) -> Result<(RpDelete, Self::Deleter)> {
+        Ok((
+            RpDelete::default(),
+            oio::OneShotDeleter::new(AzdlsDeleter::new(self.core.clone())),
+        ))
     }
 
     async fn list(&self, path: &str, args: OpList) -> Result<(RpList, Self::Lister)> {
@@ -399,10 +377,8 @@ impl Accessor for AzdlsBackend {
         if let Some(resp) = self.core.azdls_ensure_parent_path(to).await? {
             let status = resp.status();
             match status {
-                StatusCode::CREATED | StatusCode::CONFLICT => {
-                    resp.into_body().consume().await?;
-                }
-                _ => return Err(parse_error(resp).await?),
+                StatusCode::CREATED | StatusCode::CONFLICT => {}
+                _ => return Err(parse_error(resp)),
             }
         }
 
@@ -411,11 +387,8 @@ impl Accessor for AzdlsBackend {
         let status = resp.status();
 
         match status {
-            StatusCode::CREATED => {
-                resp.into_body().consume().await?;
-                Ok(RpRename::default())
-            }
-            _ => Err(parse_error(resp).await?),
+            StatusCode::CREATED => Ok(RpRename::default()),
+            _ => Err(parse_error(resp)),
         }
     }
 }
@@ -446,9 +419,7 @@ fn infer_storage_name_from_endpoint(endpoint: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::AzdlsBuilder;
-    use crate::services::azdls::backend::infer_storage_name_from_endpoint;
-    use crate::Builder;
+    use super::infer_storage_name_from_endpoint;
 
     #[test]
     fn test_infer_storage_name_from_endpoint() {
@@ -462,47 +433,5 @@ mod tests {
         let endpoint = "https://account.dfs.core.windows.net/";
         let storage_name = infer_storage_name_from_endpoint(endpoint);
         assert_eq!(storage_name, Some("account".to_string()));
-    }
-
-    #[test]
-    fn test_builder_from_endpoint_and_key_infer_account_name() {
-        let mut azdls_builder = AzdlsBuilder::default();
-        azdls_builder.endpoint("https://storagesample.dfs.core.chinacloudapi.cn");
-        azdls_builder.account_key("account-key");
-        azdls_builder.filesystem("filesystem");
-        let azdls = azdls_builder
-            .build()
-            .expect("build Azdls should be succeeded.");
-
-        assert_eq!(
-            azdls.core.endpoint,
-            "https://storagesample.dfs.core.chinacloudapi.cn"
-        );
-
-        assert_eq!(azdls.core.filesystem, "filesystem".to_string());
-
-        assert_eq!(
-            azdls_builder.config.account_key.unwrap(),
-            "account-key".to_string()
-        );
-    }
-
-    #[test]
-    fn test_no_key_wont_infer_account_name() {
-        let mut azdls_builder = AzdlsBuilder::default();
-        azdls_builder.endpoint("https://storagesample.dfs.core.windows.net");
-        azdls_builder.filesystem("filesystem");
-        let azdls = azdls_builder
-            .build()
-            .expect("build Azdls should be succeeded.");
-
-        assert_eq!(
-            azdls.core.endpoint,
-            "https://storagesample.dfs.core.windows.net"
-        );
-
-        assert_eq!(azdls.core.filesystem, "filesystem".to_string());
-
-        assert_eq!(azdls_builder.config.account_key, None);
     }
 }

@@ -1,7 +1,6 @@
 //! # Chapter 2: Tokens and Tags
 //!
 //! The simplest *useful* parser you can write is one which matches tokens.
-//! In our case, tokens are `char`.
 //!
 //! ## Tokens
 //!

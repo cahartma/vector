@@ -252,15 +252,8 @@ pub trait Stream: Offset<<Self as Stream>::Checkpoint> + crate::lib::std::fmt::D
     /// May panic if an invalid [`Self::Checkpoint`] is provided
     fn reset(&mut self, checkpoint: &Self::Checkpoint);
 
-    /// Deprecated for callers as of 0.7.10, instead call [`Stream::trace`]
-    #[deprecated(since = "0.7.10", note = "Replaced with `Stream::trace`")]
+    /// Return the inner-most stream
     fn raw(&self) -> &dyn crate::lib::std::fmt::Debug;
-
-    /// Write out a single-line summary of the current parse location
-    fn trace(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        #![allow(deprecated)]
-        write!(f, "{:#?}", self.raw())
-    }
 }
 
 impl<'i, T> Stream for &'i [T]
@@ -358,10 +351,6 @@ where
     #[inline(always)]
     fn raw(&self) -> &dyn crate::lib::std::fmt::Debug {
         self
-    }
-
-    fn trace(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{self:?}")
     }
 }
 

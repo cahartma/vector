@@ -26,6 +26,8 @@ impl BlockingSchedule {
                 }
                 #[cfg(feature = "rt-multi-thread")]
                 scheduler::Handle::MultiThread(_) => {}
+                #[cfg(all(tokio_unstable, feature = "rt-multi-thread"))]
+                scheduler::Handle::MultiThreadAlt(_) => {}
             }
         }
         BlockingSchedule {
@@ -49,6 +51,8 @@ impl task::Schedule for BlockingSchedule {
                 }
                 #[cfg(feature = "rt-multi-thread")]
                 scheduler::Handle::MultiThread(_) => {}
+                #[cfg(all(tokio_unstable, feature = "rt-multi-thread"))]
+                scheduler::Handle::MultiThreadAlt(_) => {}
             }
         }
         None

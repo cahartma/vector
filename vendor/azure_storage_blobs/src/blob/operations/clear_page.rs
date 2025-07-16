@@ -1,5 +1,9 @@
 use crate::prelude::*;
-use azure_core::{headers::*, prelude::*, RequestId};
+use azure_core::{
+    headers::{BLOB_TYPE, PAGE_WRITE, *},
+    prelude::*,
+    RequestId,
+};
 use time::OffsetDateTime;
 
 operation! {

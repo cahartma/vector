@@ -1,6 +1,7 @@
-use crate::prelude::BlobServiceClient;
-use azure_core::{prelude::*, Response as HttpResponse};
+use azure_core::{prelude::*, xml::read_xml, Response as HttpResponse};
 use azure_storage::headers::CommonStorageResponseHeaders;
+
+use crate::prelude::BlobServiceClient;
 
 operation! {
     #[stream]
@@ -61,7 +62,8 @@ impl Continuable for FindBlobsByTagsResponse {
 impl FindBlobsByTagsResponse {
     async fn try_from(response: HttpResponse) -> azure_core::Result<Self> {
         let (_status_code, headers, body) = response.deconstruct();
-        let body: ListBlobsByTagsBody = body.xml().await?;
+        let body = body.collect().await?;
+        let body: ListBlobsByTagsBody = read_xml(&body)?;
 
         Ok(Self {
             blobs: body.blobs.blobs,
@@ -99,10 +101,9 @@ pub struct Blob {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use azure_core::xml::read_xml;
 
     #[test]
-    fn parse_body() -> azure_core::Result<()> {
+    fn parse_body() {
         const BODY: &[u8] = b"<?xml version=\"1.0\" encoding=\"utf-8\"?>
         <EnumerationResults ServiceEndpoint=\"https://hsdgeventstoredev.blob.core.windows.net/\">
           <Where>tag1='value1'</Where>
@@ -116,9 +117,8 @@ mod tests {
           <NextMarker/>
         </EnumerationResults>";
 
-        let body: ListBlobsByTagsBody = read_xml(BODY)?;
+        let body: ListBlobsByTagsBody = read_xml(BODY).unwrap();
         assert_eq!(body.blobs.blobs.len(), 1);
         assert_eq!(body.blobs.blobs[0].name, "test1");
-        Ok(())
     }
 }

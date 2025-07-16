@@ -1,11 +1,7 @@
 use async_trait::async_trait;
 
 #[derive(Debug)]
-struct NoopClient;
-
-pub(crate) fn new_noop_client() -> std::sync::Arc<dyn crate::HttpClient> {
-    std::sync::Arc::new(NoopClient)
-}
+pub struct NoopClient;
 
 // TODO(rylev): we probably don't want to limit this to wasm32
 // as there will be wasm environments with threads.

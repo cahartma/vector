@@ -27,7 +27,7 @@ use std::io;
 use std::os::windows::prelude::{AsRawHandle, IntoRawHandle, OwnedHandle, RawHandle};
 use std::pin::Pin;
 use std::process::Stdio;
-use std::process::{Child as StdChild, ExitStatus};
+use std::process::{Child as StdChild, Command as StdCommand, ExitStatus};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
@@ -66,7 +66,8 @@ struct Waiting {
 unsafe impl Sync for Waiting {}
 unsafe impl Send for Waiting {}
 
-pub(crate) fn build_child(mut child: StdChild) -> io::Result<SpawnedChild> {
+pub(crate) fn spawn_child(cmd: &mut StdCommand) -> io::Result<SpawnedChild> {
+    let mut child = cmd.spawn()?;
     let stdin = child.stdin.take().map(stdio).transpose()?;
     let stdout = child.stdout.take().map(stdio).transpose()?;
     let stderr = child.stderr.take().map(stdio).transpose()?;

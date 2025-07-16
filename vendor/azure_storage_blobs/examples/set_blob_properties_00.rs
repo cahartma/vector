@@ -1,6 +1,7 @@
+#[macro_use]
+extern crate log;
 use azure_storage::prelude::*;
 use azure_storage_blobs::prelude::*;
-use tracing::trace;
 
 #[tokio::main]
 async fn main() -> azure_core::Result<()> {

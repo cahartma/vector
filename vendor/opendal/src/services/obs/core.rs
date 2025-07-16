@@ -17,6 +17,7 @@
 
 use std::fmt::Debug;
 use std::fmt::Formatter;
+use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -37,14 +38,19 @@ use serde::Serialize;
 use crate::raw::*;
 use crate::*;
 
+pub mod constants {
+    pub const X_OBS_META_PREFIX: &str = "x-obs-meta-";
+    pub const X_OBS_VERSION_ID: &str = "x-obs-version-id";
+}
+
 pub struct ObsCore {
+    pub info: Arc<AccessorInfo>,
     pub bucket: String,
     pub root: String,
     pub endpoint: String,
 
     pub signer: HuaweicloudObsSigner,
     pub loader: HuaweicloudObsCredentialLoader,
-    pub client: HttpClient,
 }
 
 impl Debug for ObsCore {
@@ -95,8 +101,8 @@ impl ObsCore {
     }
 
     #[inline]
-    pub async fn send(&self, req: Request<AsyncBody>) -> Result<Response<IncomingAsyncBody>> {
-        self.client.send(req).await
+    pub async fn send(&self, req: Request<Buffer>) -> Result<Response<Buffer>> {
+        self.info.http_client().send(req).await
     }
 }
 
@@ -104,16 +110,22 @@ impl ObsCore {
     pub async fn obs_get_object(
         &self,
         path: &str,
+        range: BytesRange,
         args: &OpRead,
-    ) -> Result<Response<IncomingAsyncBody>> {
-        let mut req = self.obs_get_object_request(path, args)?;
+    ) -> Result<Response<HttpBody>> {
+        let mut req = self.obs_get_object_request(path, range, args)?;
 
         self.sign(&mut req).await?;
 
-        self.send(req).await
+        self.info.http_client().fetch(req).await
     }
 
-    pub fn obs_get_object_request(&self, path: &str, args: &OpRead) -> Result<Request<AsyncBody>> {
+    pub fn obs_get_object_request(
+        &self,
+        path: &str,
+        range: BytesRange,
+        args: &OpRead,
+    ) -> Result<Request<Buffer>> {
         let p = build_abs_path(&self.root, path);
 
         let url = format!("{}/{}", self.endpoint, percent_encode_path(&p));
@@ -124,8 +136,7 @@ impl ObsCore {
             req = req.header(IF_MATCH, if_match);
         }
 
-        let range = args.range();
-        if !range.is_full() {
+        if range.is_full() {
             req = req.header(http::header::RANGE, range.to_header())
         }
 
@@ -133,9 +144,7 @@ impl ObsCore {
             req = req.header(IF_NONE_MATCH, if_none_match);
         }
 
-        let req = req
-            .body(AsyncBody::Empty)
-            .map_err(new_request_build_error)?;
+        let req = req.body(Buffer::new()).map_err(new_request_build_error)?;
 
         Ok(req)
     }
@@ -145,8 +154,8 @@ impl ObsCore {
         path: &str,
         size: Option<u64>,
         args: &OpWrite,
-        body: AsyncBody,
-    ) -> Result<Request<AsyncBody>> {
+        body: Buffer,
+    ) -> Result<Request<Buffer>> {
         let p = build_abs_path(&self.root, path);
 
         let url = format!("{}/{}", self.endpoint, percent_encode_path(&p));
@@ -164,16 +173,19 @@ impl ObsCore {
             req = req.header(CONTENT_TYPE, mime)
         }
 
+        // Set user metadata headers.
+        if let Some(user_metadata) = args.user_metadata() {
+            for (key, value) in user_metadata {
+                req = req.header(format!("{}{}", constants::X_OBS_META_PREFIX, key), value)
+            }
+        }
+
         let req = req.body(body).map_err(new_request_build_error)?;
 
         Ok(req)
     }
 
-    pub async fn obs_head_object(
-        &self,
-        path: &str,
-        args: &OpStat,
-    ) -> Result<Response<IncomingAsyncBody>> {
+    pub async fn obs_head_object(&self, path: &str, args: &OpStat) -> Result<Response<Buffer>> {
         let mut req = self.obs_head_object_request(path, args)?;
 
         self.sign(&mut req).await?;
@@ -181,7 +193,7 @@ impl ObsCore {
         self.send(req).await
     }
 
-    pub fn obs_head_object_request(&self, path: &str, args: &OpStat) -> Result<Request<AsyncBody>> {
+    pub fn obs_head_object_request(&self, path: &str, args: &OpStat) -> Result<Request<Buffer>> {
         let p = build_abs_path(&self.root, path);
 
         let url = format!("{}/{}", self.endpoint, percent_encode_path(&p));
@@ -199,23 +211,19 @@ impl ObsCore {
             req = req.header(IF_NONE_MATCH, if_none_match);
         }
 
-        let req = req
-            .body(AsyncBody::Empty)
-            .map_err(new_request_build_error)?;
+        let req = req.body(Buffer::new()).map_err(new_request_build_error)?;
 
         Ok(req)
     }
 
-    pub async fn obs_delete_object(&self, path: &str) -> Result<Response<IncomingAsyncBody>> {
+    pub async fn obs_delete_object(&self, path: &str) -> Result<Response<Buffer>> {
         let p = build_abs_path(&self.root, path);
 
         let url = format!("{}/{}", self.endpoint, percent_encode_path(&p));
 
         let req = Request::delete(&url);
 
-        let mut req = req
-            .body(AsyncBody::Empty)
-            .map_err(new_request_build_error)?;
+        let mut req = req.body(Buffer::new()).map_err(new_request_build_error)?;
 
         self.sign(&mut req).await?;
 
@@ -228,8 +236,8 @@ impl ObsCore {
         position: u64,
         size: u64,
         args: &OpWrite,
-        body: AsyncBody,
-    ) -> Result<Request<AsyncBody>> {
+        body: Buffer,
+    ) -> Result<Request<Buffer>> {
         let p = build_abs_path(&self.root, path);
         let url = format!(
             "{}/{}?append&position={}",
@@ -258,11 +266,7 @@ impl ObsCore {
         Ok(req)
     }
 
-    pub async fn obs_copy_object(
-        &self,
-        from: &str,
-        to: &str,
-    ) -> Result<Response<IncomingAsyncBody>> {
+    pub async fn obs_copy_object(&self, from: &str, to: &str) -> Result<Response<Buffer>> {
         let source = build_abs_path(&self.root, from);
         let target = build_abs_path(&self.root, to);
 
@@ -271,7 +275,7 @@ impl ObsCore {
 
         let mut req = Request::put(&url)
             .header("x-obs-copy-source", &source)
-            .body(AsyncBody::Empty)
+            .body(Buffer::new())
             .map_err(new_request_build_error)?;
 
         self.sign(&mut req).await?;
@@ -285,31 +289,25 @@ impl ObsCore {
         next_marker: &str,
         delimiter: &str,
         limit: Option<usize>,
-    ) -> Result<Response<IncomingAsyncBody>> {
+    ) -> Result<Response<Buffer>> {
         let p = build_abs_path(&self.root, path);
+        let mut url = QueryPairsWriter::new(&self.endpoint);
 
-        let mut queries = vec![];
         if !path.is_empty() {
-            queries.push(format!("prefix={}", percent_encode_path(&p)));
+            url = url.push("prefix", &percent_encode_path(&p));
         }
         if !delimiter.is_empty() {
-            queries.push(format!("delimiter={delimiter}"));
+            url = url.push("delimiter", delimiter);
         }
         if let Some(limit) = limit {
-            queries.push(format!("max-keys={limit}"));
+            url = url.push("max-keys", &limit.to_string());
         }
         if !next_marker.is_empty() {
-            queries.push(format!("marker={next_marker}"));
+            url = url.push("marker", next_marker);
         }
 
-        let url = if queries.is_empty() {
-            self.endpoint.to_string()
-        } else {
-            format!("{}?{}", self.endpoint, queries.join("&"))
-        };
-
-        let mut req = Request::get(&url)
-            .body(AsyncBody::Empty)
+        let mut req = Request::get(url.finish())
+            .body(Buffer::new())
             .map_err(new_request_build_error)?;
 
         self.sign(&mut req).await?;
@@ -320,7 +318,7 @@ impl ObsCore {
         &self,
         path: &str,
         content_type: Option<&str>,
-    ) -> Result<Response<IncomingAsyncBody>> {
+    ) -> Result<Response<Buffer>> {
         let p = build_abs_path(&self.root, path);
 
         let url = format!("{}/{}?uploads", self.endpoint, percent_encode_path(&p));
@@ -329,9 +327,7 @@ impl ObsCore {
         if let Some(mime) = content_type {
             req = req.header(CONTENT_TYPE, mime)
         }
-        let mut req = req
-            .body(AsyncBody::Empty)
-            .map_err(new_request_build_error)?;
+        let mut req = req.body(Buffer::new()).map_err(new_request_build_error)?;
 
         self.sign(&mut req).await?;
 
@@ -343,8 +339,8 @@ impl ObsCore {
         upload_id: &str,
         part_number: usize,
         size: Option<u64>,
-        body: AsyncBody,
-    ) -> Result<Response<IncomingAsyncBody>> {
+        body: Buffer,
+    ) -> Result<Response<Buffer>> {
         let p = build_abs_path(&self.root, path);
 
         let url = format!(
@@ -374,7 +370,7 @@ impl ObsCore {
         path: &str,
         upload_id: &str,
         parts: Vec<CompleteMultipartUploadRequestPart>,
-    ) -> Result<Response<IncomingAsyncBody>> {
+    ) -> Result<Response<Buffer>> {
         let p = build_abs_path(&self.root, path);
         let url = format!(
             "{}/{}?uploadId={}",
@@ -388,14 +384,14 @@ impl ObsCore {
         let content = quick_xml::se::to_string(&CompleteMultipartUploadRequest {
             part: parts.to_vec(),
         })
-        .map_err(new_xml_deserialize_error)?;
+        .map_err(new_xml_serialize_error)?;
         // Make sure content length has been set to avoid post with chunked encoding.
         let req = req.header(CONTENT_LENGTH, content.len());
         // Set content-type to `application/xml` to avoid mixed with form post.
         let req = req.header(CONTENT_TYPE, "application/xml");
 
         let mut req = req
-            .body(AsyncBody::Bytes(Bytes::from(content)))
+            .body(Buffer::from(Bytes::from(content)))
             .map_err(new_request_build_error)?;
 
         self.sign(&mut req).await?;
@@ -407,7 +403,7 @@ impl ObsCore {
         &self,
         path: &str,
         upload_id: &str,
-    ) -> Result<Response<IncomingAsyncBody>> {
+    ) -> Result<Response<Buffer>> {
         let p = build_abs_path(&self.root, path);
 
         let url = format!(
@@ -418,7 +414,7 @@ impl ObsCore {
         );
 
         let mut req = Request::delete(&url)
-            .body(AsyncBody::Empty)
+            .body(Buffer::new())
             .map_err(new_request_build_error)?;
 
         self.sign(&mut req).await?;
@@ -462,7 +458,7 @@ pub struct CompleteMultipartUploadRequestPart {
     ///     etag: String,
     /// }
     ///
-    /// fn partial_escape<S>(s: &str, ser: S) -> std::result::Result<S::Ok, S::Error>
+    /// fn partial_escape<S>(s: &str, ser: S) -> Result<S::Ok, S::Error>
     /// where
     ///     S: serde::Serializer,
     /// {
@@ -473,6 +469,17 @@ pub struct CompleteMultipartUploadRequestPart {
     /// ```
     ///
     /// ref: <https://github.com/tafia/quick-xml/issues/362>
+    #[serde(rename = "ETag")]
+    pub etag: String,
+}
+
+/// Output of `CompleteMultipartUpload` operation
+#[derive(Debug, Default, Deserialize)]
+#[serde[default, rename_all = "PascalCase"]]
+pub struct CompleteMultipartUploadResult {
+    pub location: String,
+    pub bucket: String,
+    pub key: String,
     #[serde(rename = "ETag")]
     pub etag: String,
 }

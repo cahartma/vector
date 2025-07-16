@@ -6,7 +6,6 @@ use azure_core::{
     HttpClient, Request,
 };
 use std::{collections::HashMap, str::FromStr, sync::Arc};
-use tracing::warn;
 
 pub(crate) struct Oauth2HttpClient {
     http_client: Arc<dyn HttpClient>,
@@ -94,7 +93,7 @@ fn to_headers(map: &oauth2::http::header::HeaderMap) -> azure_core::headers::Hea
                     azure_core::headers::HeaderValue::from(value.to_owned()),
                 ))
             } else {
-                warn!("header value for `{key}` is not utf8");
+                log::warn!("header value for `{key}` is not utf8");
                 None
             }
         })
