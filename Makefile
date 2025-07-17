@@ -335,28 +335,9 @@ target/%/vector.tar.gz: target/%/vector CARGO_HANDLES_FRESHNESS
 # `cargo test` lacks support for testing _just_ benches otherwise we'd have
 # a target for that
 # https://github.com/rust-lang/cargo/issues/6454
-#.PHONY: test
-#test: ## Run the unit test suite
-#	${MAYBE_ENVIRONMENT_EXEC} cargo nextest run -v --workspace --no-fail-fast --no-default-features --features "${FEATURES}" --test-threads 1 --offline ${SCOPE}
 .PHONY: test
-test: ## Run all test partitions sequentially to reduce memory usage
-	@echo "Running tests in 4 partitions sequentially (lower memory use)"
-	@for i in 1 2 3 4; do \
-		echo ""; \
-		echo "==========================="; \
-		echo " Running partition $$i/4..."; \
-		echo "==========================="; \
-		${MAYBE_ENVIRONMENT_EXEC} cargo nextest run -v \
-			--workspace \
-			--no-fail-fast \
-			--no-default-features \
-			--features "${FEATURES}" \
-			--offline \
-			--test-threads 1 \
-			--partition count:$$i/4 \
-			${SCOPE} || exit $$?; \
-	done
-
+test: ## Run the unit test suite
+	${MAYBE_ENVIRONMENT_EXEC} cargo nextest run -v --workspace --no-fail-fast --no-default-features --features "${FEATURES}" --test-threads 1 --offline ${SCOPE}
 
 .PHONY: test-docs
 test-docs: ## Run the docs test suite

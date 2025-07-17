@@ -1024,6 +1024,7 @@ mod tests {
         );
     }
 
+    #[ignore] // no sources supporting a proxy in the RH build
     #[test]
     fn with_proxy() {
         let config: ConfigBuilder = format::deserialize(
@@ -1057,6 +1058,7 @@ mod tests {
         assert!(source.proxy.no_proxy.matches("localhost"));
     }
 
+    #[ignore] // no sources supporting a proxy in the RH build
     #[test]
     fn with_partial_global_proxy() {
         let config: ConfigBuilder = format::deserialize(
@@ -1089,6 +1091,7 @@ mod tests {
         assert!(source.proxy.no_proxy.matches("localhost"));
     }
 
+    #[ignore] // no sources supporting a proxy in the RH build
     #[test]
     fn with_partial_source_proxy() {
         let config: ConfigBuilder = format::deserialize(
