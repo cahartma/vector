@@ -1,8 +1,8 @@
 //! Authorize using the OAuth 2.0 client credentials flow with federated credentials.
 //!
 //! ```no_run
-//! use azure_core::{authority_hosts::AZURE_PUBLIC_CLOUD, Url};
-//! use azure_identity::{federated_credentials_flow};
+//! use azure_identity::{authority_hosts, federated_credentials_flow};
+//! use url::Url;
 //!
 //! use std::env;
 //! use std::error::Error;
@@ -24,7 +24,8 @@
 //!         &token,
 //!         &["https://management.azure.com/"],
 //!         &tenant_id,
-//!         &AZURE_PUBLIC_CLOUD,
+//!         authority_hosts::AZURE_PUBLIC_CLOUD.clone(),
+//!
 //!     )
 //!     .await?;
 //!     Ok(())
@@ -35,15 +36,16 @@
 
 mod login_response;
 
+use azure_core::Method;
 use azure_core::{
     content_type,
     error::{ErrorKind, ResultExt},
-    headers, HttpClient, Method, Request, Url,
+    headers, HttpClient, Request,
 };
+use log::{debug, error};
 use login_response::LoginResponse;
 use std::sync::Arc;
-use tracing::{debug, error};
-use url::form_urlencoded;
+use url::{form_urlencoded, Url};
 
 /// Perform the client credentials flow
 pub async fn perform(
@@ -52,7 +54,7 @@ pub async fn perform(
     client_assertion: &str,
     scopes: &[&str],
     tenant_id: &str,
-    host: &Url,
+    host: &str,
 ) -> azure_core::Result<LoginResponse> {
     let encoded: String = form_urlencoded::Serializer::new(String::new())
         .append_pair("client_id", client_id)
@@ -65,8 +67,7 @@ pub async fn perform(
         .append_pair("grant_type", "client_credentials")
         .finish();
 
-    let url = host
-        .join(&format!("/{tenant_id}/oauth2/v2.0/token"))
+    let url = Url::parse(&format!("{host}/{tenant_id}/oauth2/v2.0/token"))
         .with_context(ErrorKind::DataConversion, || {
             format!("The supplied tenant id could not be url encoded: {tenant_id}")
         })?;
@@ -80,13 +81,11 @@ pub async fn perform(
     let rsp = http_client.execute_request(&req).await?;
     let rsp_status = rsp.status();
     debug!("rsp_status == {:?}", rsp_status);
-    if rsp_status.is_success() {
-        rsp.json().await
-    } else {
-        let (rsp_status, rsp_headers, rsp_body) = rsp.deconstruct();
-        let rsp_body = rsp_body.collect().await?;
+    let rsp_body = rsp.into_body().collect().await?;
+    if !rsp_status.is_success() {
         let text = std::str::from_utf8(&rsp_body)?;
         error!("rsp_body == {:?}", text);
-        Err(ErrorKind::http_response_from_parts(rsp_status, &rsp_headers, &rsp_body).into_error())
+        return Err(ErrorKind::http_response_from_body(rsp_status, &rsp_body).into_error());
     }
+    serde_json::from_slice(&rsp_body).map_kind(ErrorKind::DataConversion)
 }

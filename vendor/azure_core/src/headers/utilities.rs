@@ -80,7 +80,7 @@ pub fn delete_type_permanent_from_headers(headers: &Headers) -> crate::Result<bo
     if result.is_ok() {
         result
     } else {
-        tracing::warn!("Error receiving delete type permanent.  returning false");
+        log::warn!("Error receiving delete type permanent.  returning false");
         Ok(false)
     }
 }

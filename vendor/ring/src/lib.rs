@@ -4,9 +4,9 @@
 // purpose with or without fee is hereby granted, provided that the above
 // copyright notice and this permission notice appear in all copies.
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHORS DISCLAIM ALL WARRANTIES
+// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
 // WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
-// MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY
+// MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
 // SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
 // WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
 // OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
@@ -22,6 +22,24 @@
 //!     <th>Description
 //! <tr><td><code>alloc (default)</code>
 //!     <td>Enable features that require use of the heap, RSA in particular.
+//! <tr><td><code>less-safe-getrandom-custom-or-rdrand</code>
+//!     <td>Treat user-provided ("custom") and RDRAND-based <code>getrandom</code>
+//!         implementations as secure random number generators (see
+//!         <code>SecureRandom</code>). This feature only works with
+//!         <code>os = "none"</code> targets. See
+//!         <a href="https://docs.rs/getrandom/0.2.10/getrandom/macro.register_custom_getrandom.html">
+//!             <code>register_custom_getrandom</code>
+//!         </a> and <a href="https://docs.rs/getrandom/0.2.10/getrandom/#rdrand-on-x86">
+//!             RDRAND on x86
+//!         </a> for additional details.
+//! <tr><td><code>less-safe-getrandom-espidf</code>
+//!     <td>Treat getrandom as a secure random number generator (see
+//!         <code>SecureRandom</code>) on the esp-idf target. While the esp-idf
+//!         target does have hardware RNG, it is beyond the scope of ring to
+//!         ensure its configuration. This feature allows ring to build
+//!         on esp-idf despite the likelihood that RNG is not secure.
+//!         This feature only works with <code>os = espidf</code> targets.
+//!         See <a href="https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/random.html">
 //! <tr><td><code>std</code>
 //!     <td>Enable features that use libstd, in particular
 //!         <code>std::error::Error</code> integration. Implies `alloc`.
@@ -34,7 +52,6 @@
 //! </table>
 
 // When running mk/package.sh, don't actually build any code.
-#![cfg(not(pregenerate_asm_only))]
 #![allow(
     clippy::collapsible_if,
     clippy::identity_op,
@@ -49,7 +66,32 @@
     unsafe_code
 )]
 #![deny(variant_size_differences)]
-#![forbid(unused_results)]
+#![forbid(
+    unused_results,
+    unsafe_op_in_unsafe_fn,
+    clippy::char_lit_as_u8,
+    clippy::fn_to_numeric_cast,
+    clippy::fn_to_numeric_cast_with_truncation,
+    clippy::ptr_as_ptr
+)]
+#![warn(
+    clippy::unnecessary_cast,
+    clippy::cast_lossless,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
+#![cfg_attr(
+    not(any(
+        all(target_arch = "aarch64", target_endian = "little"),
+        all(target_arch = "arm", target_endian = "little"),
+        target_arch = "x86",
+        target_arch = "x86_64",
+        feature = "alloc"
+    )),
+    allow(dead_code, unused_imports, unused_macros)
+)]
 #![no_std]
 
 #[cfg(feature = "alloc")]
@@ -65,9 +107,6 @@ mod prefixed;
 pub mod test;
 
 #[macro_use]
-mod arithmetic;
-
-#[macro_use]
 mod bssl;
 
 #[macro_use]
@@ -76,7 +115,7 @@ mod polyfill;
 pub mod aead;
 
 pub mod agreement;
-
+mod arithmetic;
 mod bits;
 
 pub(crate) mod c;
@@ -87,7 +126,6 @@ pub mod io;
 mod cpu;
 pub mod digest;
 mod ec;
-mod endian;
 pub mod error;
 pub mod hkdf;
 pub mod hmac;
@@ -100,6 +138,9 @@ pub mod rand;
 pub mod rsa;
 
 pub mod signature;
+
+#[cfg(test)]
+mod tests;
 
 mod sealed {
     /// Traits that are designed to only be implemented internally in *ring*.

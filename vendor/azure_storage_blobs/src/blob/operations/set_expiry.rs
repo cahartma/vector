@@ -1,5 +1,6 @@
 use crate::prelude::*;
 use azure_core::{headers::*, prelude::*, RequestId, Response};
+use std::convert::{TryFrom, TryInto};
 
 operation! {
     SetBlobExpiry,

@@ -1,9 +1,9 @@
-use crate::{token_credentials::cache::TokenCache, TokenCredentialOptions};
+use super::authority_hosts;
 use azure_core::{
-    auth::{AccessToken, Secret, TokenCredential},
+    auth::{AccessToken, TokenCredential, TokenResponse},
     base64, content_type,
-    error::{Error, ErrorKind, ResultExt},
-    headers, HttpClient, Method, Request,
+    error::{Error, ErrorKind},
+    headers, new_http_client, HttpClient, Method, Request,
 };
 use openssl::{
     error::ErrorStack,
@@ -14,69 +14,48 @@ use openssl::{
     x509::X509,
 };
 use serde::Deserialize;
-use std::{str, sync::Arc, time::Duration};
+use std::time::Duration;
+use std::{str, sync::Arc};
 use time::OffsetDateTime;
 use url::{form_urlencoded, Url};
 
 /// Refresh time to use in seconds
 const DEFAULT_REFRESH_TIME: i64 = 300;
 
-const AZURE_TENANT_ID_ENV_KEY: &str = "AZURE_TENANT_ID";
-const AZURE_CLIENT_ID_ENV_KEY: &str = "AZURE_CLIENT_ID";
-const AZURE_CLIENT_CERTIFICATE_PATH_ENV_KEY: &str = "AZURE_CLIENT_CERTIFICATE_PATH";
-const AZURE_CLIENT_CERTIFICATE_PASSWORD_ENV_KEY: &str = "AZURE_CLIENT_CERTIFICATE_PASSWORD";
-const AZURE_CLIENT_SEND_CERTIFICATE_CHAIN_ENV_KEY: &str = "AZURE_CLIENT_SEND_CERTIFICATE_CHAIN";
-
 /// Provides options to configure how the Identity library makes authentication
 /// requests to Azure Active Directory.
-#[derive(Clone, Debug)]
-pub struct ClientCertificateCredentialOptions {
-    options: TokenCredentialOptions,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CertificateCredentialOptions {
+    authority_host: String,
     send_certificate_chain: bool,
 }
 
-/// Alias of CertificateCredentialOptions for backwards compatibility.
-#[deprecated(
-    since = "0.19.0",
-    note = "Please use ClientCertificateCredentialOptions instead"
-)]
-pub type CertificateCredentialOptions = ClientCertificateCredentialOptions;
-
-impl From<TokenCredentialOptions> for ClientCertificateCredentialOptions {
-    fn from(options: TokenCredentialOptions) -> Self {
-        let env = options.env();
-        let send_certificate_chain = env
-            .var(AZURE_CLIENT_SEND_CERTIFICATE_CHAIN_ENV_KEY)
-            .map(|s| s == "1" || s.to_lowercase() == "true")
-            .unwrap_or(false);
-        Self {
-            options,
-            send_certificate_chain,
-        }
-    }
-}
-
-impl Default for ClientCertificateCredentialOptions {
+impl Default for CertificateCredentialOptions {
     fn default() -> Self {
-        Self::from(TokenCredentialOptions::default())
+        Self {
+            authority_host: authority_hosts::AZURE_PUBLIC_CLOUD.to_owned(),
+            send_certificate_chain: false,
+        }
     }
 }
 
-impl ClientCertificateCredentialOptions {
+impl CertificateCredentialOptions {
     /// Create a new `TokenCredentialsOptions`. default() may also be used.
-    pub fn new(options: impl Into<TokenCredentialOptions>, send_certificate_chain: bool) -> Self {
+    pub fn new(authority_host: String, send_certificate_chain: bool) -> Self {
         Self {
-            options: options.into(),
+            authority_host,
             send_certificate_chain,
         }
     }
-
-    pub fn options(&self) -> &TokenCredentialOptions {
-        &self.options
+    /// Set the authority host for authentication requests.
+    pub fn set_authority_host(&mut self, authority_host: String) {
+        self.authority_host = authority_host;
     }
 
-    pub fn options_mut(&mut self) -> &mut TokenCredentialOptions {
-        &mut self.options
+    /// The authority host to use for authentication requests.  The default is
+    /// <https://login.microsoftonline.com>.
+    pub fn authority_host(&self) -> &str {
+        &self.authority_host
     }
 
     /// Enable/disable sending the certificate chain
@@ -96,42 +75,36 @@ impl ClientCertificateCredentialOptions {
 ///
 /// In order to use subject name validation `send_cert_chain` option must be set to true
 /// The certificate is expected to be in base64 encoded PKCS12 format
-#[derive(Debug)]
 pub struct ClientCertificateCredential {
     tenant_id: String,
     client_id: String,
-    client_certificate: Secret,
-    client_certificate_pass: Secret,
+    client_certificate: String,
+    client_certificate_pass: String,
     http_client: Arc<dyn HttpClient>,
-    authority_host: Url,
-    send_certificate_chain: bool,
-    cache: TokenCache,
+    options: CertificateCredentialOptions,
 }
 
 impl ClientCertificateCredential {
     /// Create a new `ClientCertificateCredential`
-    pub fn new<C, P>(
+    pub fn new(
         tenant_id: String,
         client_id: String,
-        client_certificate: C,
-        client_certificate_pass: P,
-        options: impl Into<ClientCertificateCredentialOptions>,
-    ) -> azure_core::Result<ClientCertificateCredential>
-    where
-        C: Into<Secret>,
-        P: Into<Secret>,
-    {
-        let options = options.into();
-        Ok(ClientCertificateCredential {
+        client_certificate: String,
+        client_certificate_pass: String,
+        options: CertificateCredentialOptions,
+    ) -> ClientCertificateCredential {
+        ClientCertificateCredential {
             tenant_id,
             client_id,
-            client_certificate: client_certificate.into(),
-            client_certificate_pass: client_certificate_pass.into(),
-            http_client: options.options().http_client().clone(),
-            authority_host: options.options().authority_host()?.clone(),
-            send_certificate_chain: options.send_certificate_chain(),
-            cache: TokenCache::new(),
-        })
+            client_certificate,
+            client_certificate_pass,
+            http_client: new_http_client(),
+            options,
+        }
+    }
+
+    fn options(&self) -> &CertificateCredentialOptions {
+        &self.options
     }
 
     fn sign(jwt: &str, pkey: &PKey<Private>) -> Result<Vec<u8>, ErrorStack> {
@@ -149,42 +122,54 @@ impl ClientCertificateCredential {
     fn as_jwt_part(part: &[u8]) -> String {
         base64::encode_url_safe(part)
     }
+}
 
-    async fn get_token(&self, scopes: &[&str]) -> azure_core::Result<AccessToken> {
-        if scopes.len() != 1 {
-            return Err(Error::message(
-                ErrorKind::Credential,
-                "only one scope is supported for IMDS authentication",
-            ));
-        }
+#[derive(Deserialize, Debug, Default)]
+#[serde(default)]
+struct AadTokenResponse {
+    token_type: String,
+    expires_in: u64,
+    ext_expires_in: u64,
+    access_token: String,
+}
 
-        let Some(scope) = scopes.first() else {
-            return Err(Error::message(
-                ErrorKind::Credential,
-                "no scopes were provided",
-            ));
-        };
+fn get_encoded_cert(cert: &X509) -> azure_core::Result<String> {
+    Ok(format!(
+        "\"{}\"",
+        base64::encode(cert.to_pem().map_err(openssl_error)?)
+    ))
+}
 
-        let url = self
-            .authority_host
-            .join(&format!("{}/oauth2/v2.0/token", self.tenant_id))?;
+fn openssl_error(err: ErrorStack) -> azure_core::error::Error {
+    Error::new(ErrorKind::Credential, err)
+}
 
-        let certificate = base64::decode(self.client_certificate.secret())
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+impl TokenCredential for ClientCertificateCredential {
+    async fn get_token(&self, resource: &str) -> azure_core::Result<TokenResponse> {
+        let options = self.options();
+        let url = &format!(
+            "{}/{}/oauth2/v2.0/token",
+            options.authority_host(),
+            self.tenant_id
+        );
+
+        let certificate = base64::decode(&self.client_certificate)
             .map_err(|_| Error::message(ErrorKind::Credential, "Base64 decode failed"))?;
-
-        let pkcs12_certificate = Pkcs12::from_der(&certificate)
+        let certificate = Pkcs12::from_der(&certificate)
             .map_err(openssl_error)?
-            .parse2(self.client_certificate_pass.secret())
+            .parse2(&self.client_certificate_pass)
             .map_err(openssl_error)?;
 
-        let Some(cert) = pkcs12_certificate.cert.as_ref() else {
+        let Some(cert) = certificate.cert.as_ref() else {
             return Err(Error::message(
                 ErrorKind::Credential,
                 "Certificate not found",
             ));
         };
 
-        let Some(pkey) = pkcs12_certificate.pkey.as_ref() else {
+        let Some(pkey) = certificate.pkey.as_ref() else {
             return Err(Error::message(
                 ErrorKind::Credential,
                 "Private key not found",
@@ -199,10 +184,10 @@ impl ClientCertificateCredential {
         let expiry_time = current_time + DEFAULT_REFRESH_TIME;
         let x5t = base64::encode(thumbprint);
 
-        let header = match self.send_certificate_chain {
+        let header = match options.send_certificate_chain {
             true => {
                 let base_signature = get_encoded_cert(cert)?;
-                let x5c = match pkcs12_certificate.ca {
+                let x5c = match certificate.ca {
                     Some(chain) => {
                         let chain = chain
                             .into_iter()
@@ -237,7 +222,7 @@ impl ClientCertificateCredential {
             let mut encoded = &mut form_urlencoded::Serializer::new(String::new());
             encoded = encoded
                 .append_pair("client_id", self.client_id.as_str())
-                .append_pair("scope", scope)
+                .append_pair("scope", format!("{}/.default", resource).as_str())
                 .append_pair(
                     "client_assertion_type",
                     "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
@@ -247,6 +232,7 @@ impl ClientCertificateCredential {
             encoded.finish()
         };
 
+        let url = Url::parse(url)?;
         let mut req = Request::new(url, Method::Post);
         req.insert_header(
             headers::CONTENT_TYPE,
@@ -256,107 +242,16 @@ impl ClientCertificateCredential {
 
         let rsp = self.http_client.execute_request(&req).await?;
         let rsp_status = rsp.status();
+        let rsp_body = rsp.into_body().collect().await?;
 
         if !rsp_status.is_success() {
-            let (rsp_status, rsp_headers, rsp_body) = rsp.deconstruct();
-            let rsp_body = rsp_body.collect().await?;
-            return Err(
-                ErrorKind::http_response_from_parts(rsp_status, &rsp_headers, &rsp_body)
-                    .into_error(),
-            );
+            return Err(ErrorKind::http_response_from_body(rsp_status, &rsp_body).into_error());
         }
 
-        let response: AadTokenResponse = rsp.json().await?;
-        Ok(AccessToken::new(
-            response.access_token,
+        let response: AadTokenResponse = serde_json::from_slice(&rsp_body)?;
+        Ok(TokenResponse::new(
+            AccessToken::new(response.access_token.to_string()),
             OffsetDateTime::now_utc() + Duration::from_secs(response.expires_in),
         ))
-    }
-
-    pub fn create(
-        options: impl Into<ClientCertificateCredentialOptions>,
-    ) -> azure_core::Result<Self> {
-        let options = options.into();
-        let env = options.options().env();
-        let tenant_id =
-            env.var(AZURE_TENANT_ID_ENV_KEY)
-                .with_context(ErrorKind::Credential, || {
-                    format!(
-                        "client certificate credential requires {} environment variable",
-                        AZURE_TENANT_ID_ENV_KEY
-                    )
-                })?;
-        let client_id =
-            env.var(AZURE_CLIENT_ID_ENV_KEY)
-                .with_context(ErrorKind::Credential, || {
-                    format!(
-                        "client certificate credential requires {} environment variable",
-                        AZURE_CLIENT_ID_ENV_KEY
-                    )
-                })?;
-        let client_certificate_path = env
-            .var(AZURE_CLIENT_CERTIFICATE_PATH_ENV_KEY)
-            .with_context(ErrorKind::Credential, || {
-                format!(
-                    "client certificate credential requires {} environment variable",
-                    AZURE_CLIENT_CERTIFICATE_PATH_ENV_KEY
-                )
-            })?;
-        let client_certificate_password = env
-            .var(AZURE_CLIENT_CERTIFICATE_PASSWORD_ENV_KEY)
-            .with_context(ErrorKind::Credential, || {
-                format!(
-                    "client certificate credential requires {} environment variable",
-                    AZURE_CLIENT_CERTIFICATE_PASSWORD_ENV_KEY
-                )
-            })?;
-
-        let client_certificate = std::fs::read_to_string(client_certificate_path.clone())
-            .with_context(ErrorKind::Credential, || {
-                format!(
-                    "failed to read client certificate from file {}",
-                    client_certificate_path.as_str()
-                )
-            })?;
-
-        ClientCertificateCredential::new(
-            tenant_id,
-            client_id,
-            client_certificate,
-            client_certificate_password,
-            options,
-        )
-    }
-}
-
-#[derive(Deserialize, Debug, Default)]
-#[serde(default)]
-struct AadTokenResponse {
-    token_type: String,
-    expires_in: u64,
-    ext_expires_in: u64,
-    access_token: String,
-}
-
-fn get_encoded_cert(cert: &X509) -> azure_core::Result<String> {
-    Ok(format!(
-        "\"{}\"",
-        base64::encode(cert.to_pem().map_err(openssl_error)?)
-    ))
-}
-
-fn openssl_error(err: ErrorStack) -> azure_core::error::Error {
-    Error::new(ErrorKind::Credential, err)
-}
-
-#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
-#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
-impl TokenCredential for ClientCertificateCredential {
-    async fn get_token(&self, scopes: &[&str]) -> azure_core::Result<AccessToken> {
-        self.cache.get_token(scopes, self.get_token(scopes)).await
-    }
-
-    async fn clear_cache(&self) -> azure_core::Result<()> {
-        self.cache.clear().await
     }
 }

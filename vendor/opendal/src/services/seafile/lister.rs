@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
+use bytes::Buf;
 use http::header;
 use http::Request;
 use http::StatusCode;
@@ -44,7 +44,6 @@ impl SeafileLister {
     }
 }
 
-#[async_trait]
 impl oio::PageList for SeafileLister {
     async fn next_page(&self, ctx: &mut oio::PageContext) -> Result<()> {
         let path = build_rooted_abs_path(&self.core.root, &self.path);
@@ -62,7 +61,7 @@ impl oio::PageList for SeafileLister {
 
         let req = req
             .header(header::AUTHORIZATION, format!("Token {}", auth_info.token))
-            .body(AsyncBody::Empty)
+            .body(Buffer::new())
             .map_err(new_request_build_error)?;
 
         let resp = self.core.send(req).await?;
@@ -71,9 +70,15 @@ impl oio::PageList for SeafileLister {
 
         match status {
             StatusCode::OK => {
-                let resp_body = &resp.into_body().bytes().await?;
-                let infos = serde_json::from_slice::<Vec<Info>>(resp_body)
+                let resp_body = resp.into_body();
+                let infos: Vec<Info> = serde_json::from_reader(resp_body.reader())
                     .map_err(new_json_deserialize_error)?;
+
+                // add path itself
+                ctx.entries.push_back(Entry::new(
+                    self.path.as_str(),
+                    Metadata::new(EntryMode::DIR),
+                ));
 
                 for info in infos {
                     if !info.name.is_empty() {
@@ -103,9 +108,7 @@ impl oio::PageList for SeafileLister {
                 ctx.done = true;
                 Ok(())
             }
-            _ => {
-                return Err(parse_error(resp).await?);
-            }
+            _ => Err(parse_error(resp)),
         }
     }
 }

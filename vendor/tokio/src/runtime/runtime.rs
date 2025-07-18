@@ -12,6 +12,10 @@ use std::time::Duration;
 cfg_rt_multi_thread! {
     use crate::runtime::Builder;
     use crate::runtime::scheduler::MultiThread;
+
+    cfg_unstable! {
+        use crate::runtime::scheduler::MultiThreadAlt;
+    }
 }
 
 /// The Tokio runtime.
@@ -113,6 +117,10 @@ pub enum RuntimeFlavor {
     CurrentThread,
     /// The flavor that executes tasks across multiple threads.
     MultiThread,
+    /// The flavor that executes tasks across multiple threads.
+    #[cfg(tokio_unstable)]
+    #[cfg_attr(docsrs, doc(cfg(tokio_unstable)))]
+    MultiThreadAlt,
 }
 
 /// The runtime scheduler is either a multi-thread or a current-thread executor.
@@ -124,6 +132,10 @@ pub(super) enum Scheduler {
     /// Execute tasks across multiple threads.
     #[cfg(feature = "rt-multi-thread")]
     MultiThread(MultiThread),
+
+    /// Execute tasks across multiple threads.
+    #[cfg(all(tokio_unstable, feature = "rt-multi-thread"))]
+    MultiThreadAlt(MultiThreadAlt),
 }
 
 impl Runtime {
@@ -356,6 +368,8 @@ impl Runtime {
             Scheduler::CurrentThread(exec) => exec.block_on(&self.handle.inner, future),
             #[cfg(feature = "rt-multi-thread")]
             Scheduler::MultiThread(exec) => exec.block_on(&self.handle.inner, future),
+            #[cfg(all(tokio_unstable, feature = "rt-multi-thread"))]
+            Scheduler::MultiThreadAlt(exec) => exec.block_on(&self.handle.inner, future),
         }
     }
 
@@ -407,6 +421,7 @@ impl Runtime {
     /// # Examples
     ///
     /// ```
+    /// # if cfg!(miri) { return } // Miri reports error when main thread terminated without waiting all remaining threads.
     /// use tokio::runtime::Runtime;
     /// use tokio::task;
     ///
@@ -414,7 +429,6 @@ impl Runtime {
     /// use std::time::Duration;
     ///
     /// fn main() {
-    /// #  if cfg!(miri) { return } // Miri reports error when main thread terminated without waiting all remaining threads.
     ///    let runtime = Runtime::new().unwrap();
     ///
     ///    runtime.block_on(async move {
@@ -483,6 +497,12 @@ impl Drop for Runtime {
             }
             #[cfg(feature = "rt-multi-thread")]
             Scheduler::MultiThread(multi_thread) => {
+                // The threaded scheduler drops its tasks on its worker threads, which is
+                // already in the runtime's context.
+                multi_thread.shutdown(&self.handle.inner);
+            }
+            #[cfg(all(tokio_unstable, feature = "rt-multi-thread"))]
+            Scheduler::MultiThreadAlt(multi_thread) => {
                 // The threaded scheduler drops its tasks on its worker threads, which is
                 // already in the runtime's context.
                 multi_thread.shutdown(&self.handle.inner);

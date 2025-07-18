@@ -1,10 +1,7 @@
-use crate::{
-    headers::Headers,
-    policies::{Policy, PolicyResult},
-    Context, Request,
-};
+use crate::headers::Headers;
+use crate::policies::{Policy, PolicyResult};
+use crate::{Context, Request};
 use std::sync::Arc;
-use tracing::trace;
 
 #[derive(Debug, Clone)]
 pub struct CustomHeaders(Headers);
@@ -31,7 +28,7 @@ impl Policy for CustomHeadersPolicy {
             custom_headers
                 .iter()
                 .for_each(|(header_name, header_value)| {
-                    trace!(
+                    log::trace!(
                         "injecting custom context header {:?} with value {:?}",
                         header_name,
                         header_value

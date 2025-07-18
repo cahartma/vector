@@ -1,9 +1,5 @@
 use crate::StorageCredentials;
-use azure_core::{
-    auth::Secret,
-    error::{Error, ErrorKind},
-};
-use tracing::warn;
+use azure_core::error::{Error, ErrorKind};
 
 // Key names.
 pub const ACCOUNT_KEY_KEY_NAME: &str = "AccountKey";
@@ -189,7 +185,7 @@ impl<'a> ConnectionString<'a> {
                 ..
             } => {
                 if self.account_key.is_some() {
-                    warn!("Both account key and SAS defined in connection string. Using only the provided SAS.");
+                    log::warn!("Both account key and SAS defined in connection string. Using only the provided SAS.");
                 }
                 StorageCredentials::sas_token(*sas_token)
             }
@@ -197,7 +193,7 @@ impl<'a> ConnectionString<'a> {
                 account_name: Some(account),
                 account_key: Some(key),
                 ..
-            } =>  Ok(StorageCredentials::access_key(*account, Secret::new((*key).to_string()))),
+            } =>  Ok(StorageCredentials::access_key(*account, *key)),
            _ => {
                 Err(Error::message(ErrorKind::Credential,
                     "Could not create a `StorageCredentail` from the provided connection string. Please validate that you have specified a means of authentication (key, SAS, etc.)."

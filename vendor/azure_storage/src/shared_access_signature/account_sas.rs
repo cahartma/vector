@@ -1,11 +1,13 @@
-use crate::shared_access_signature::{format_date, SasProtocol, SasToken};
-use azure_core::{auth::Secret, hmac::hmac_sha256};
+use crate::{
+    hmac::sign,
+    shared_access_signature::{format_date, SasProtocol, SasToken},
+};
 use std::fmt;
 use time::OffsetDateTime;
 use url::form_urlencoded;
 
 /// Service version of the shared access signature ([Azure documentation](https://docs.microsoft.com/rest/api/storageservices/create-service-sas#specifying-the-signed-version-field)).
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone)]
 pub enum AccountSasVersion {
     V20181109,
     V20150405,
@@ -24,7 +26,7 @@ impl fmt::Display for AccountSasVersion {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone)]
 pub enum AccountSasService {
     Blob,
     Queue,
@@ -44,7 +46,7 @@ impl fmt::Display for AccountSasService {
 }
 
 /// Which resources are accessible via the shared access signature ([Azure documentation](https://docs.microsoft.com/rest/api/storageservices/create-service-sas#specifying-the-signed-resource-blob-service-only)).
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone)]
 pub enum AccountSasResource {
     Blob,
     Queue,
@@ -63,7 +65,7 @@ impl fmt::Display for AccountSasResource {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone)]
 pub enum AccountSasResourceType {
     Service,
     Container,
@@ -82,7 +84,7 @@ impl fmt::Display for AccountSasResourceType {
 
 /// Indicate which operations a `key_client` may perform on the resource ([Azure documentation](https://docs.microsoft.com/rest/api/storageservices/create-service-sas#specifying-permissions)).
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Copy, Clone, Default, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, Default)]
 pub struct AccountSasPermissions {
     pub read: bool,
     pub write: bool,
@@ -128,10 +130,9 @@ impl fmt::Display for AccountSasPermissions {
     }
 }
 
-#[derive(PartialEq, Eq, Debug)]
 pub struct AccountSharedAccessSignature {
     account: String,
-    key: Secret,
+    key: String,
     version: AccountSasVersion,
     resource: AccountSasResource,
     resource_type: AccountSasResourceType,
@@ -145,7 +146,7 @@ pub struct AccountSharedAccessSignature {
 impl AccountSharedAccessSignature {
     pub fn new(
         account: String,
-        key: Secret,
+        key: String,
         resource: AccountSasResource,
         resource_type: AccountSasResourceType,
         expiry: OffsetDateTime,
@@ -173,7 +174,7 @@ impl AccountSharedAccessSignature {
     }
 
     // Azure documentation: https://docs.microsoft.com/rest/api/storageservices/create-service-sas#constructing-the-signature-string
-    fn sign(&self) -> azure_core::Result<String> {
+    fn sign(&self) -> String {
         match self.version {
             AccountSasVersion::V20181109 => {
                 let string_to_sign = format!(
@@ -191,7 +192,7 @@ impl AccountSharedAccessSignature {
                     self.version,
                 );
 
-                hmac_sha256(&string_to_sign, &self.key)
+                sign(&string_to_sign, &self.key).unwrap()
             }
             _ => {
                 // TODO: support other version tags?
@@ -203,7 +204,7 @@ impl AccountSharedAccessSignature {
 
 impl SasToken for AccountSharedAccessSignature {
     /// [Example](https://docs.microsoft.com/rest/api/storageservices/create-service-sas#service-sas-example) from Azure documentation.
-    fn token(&self) -> azure_core::Result<String> {
+    fn token(&self) -> String {
         let mut form = form_urlencoded::Serializer::new(String::new());
         form.extend_pairs(&[
             ("sv", &self.version.to_string()),
@@ -222,8 +223,20 @@ impl SasToken for AccountSharedAccessSignature {
         if let Some(protocol) = &self.protocol {
             form.append_pair("spr", &protocol.to_string());
         }
-        let sig = self.sign()?;
+        let sig = self.sign();
         form.append_pair("sig", &sig);
-        Ok(form.finish())
+        form.finish()
+    }
+}
+
+impl PartialEq for AccountSharedAccessSignature {
+    fn eq(&self, other: &Self) -> bool {
+        self.sign() == other.sign()
+    }
+}
+
+impl std::fmt::Debug for AccountSharedAccessSignature {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "SharedAccessSignature {{{}}}", self.sign())
     }
 }

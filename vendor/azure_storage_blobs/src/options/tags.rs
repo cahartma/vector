@@ -3,8 +3,11 @@ use azure_core::{
     headers::{Header, HeaderName, HeaderValue, TAGS},
     xml::to_xml,
 };
-use bytes::{Bytes, BytesMut};
-use std::{collections::HashMap, str::FromStr};
+use std::{
+    collections::HashMap,
+    iter::{Extend, IntoIterator},
+    str::FromStr,
+};
 use url::form_urlencoded;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default, Serialize)]
@@ -59,10 +62,11 @@ impl Tags {
         });
     }
 
-    pub fn to_xml(&self) -> azure_core::Result<Bytes> {
-        let mut value = BytesMut::from("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
-        value.extend(to_xml(&self)?);
-        Ok(value.freeze())
+    pub fn to_xml(&self) -> azure_core::Result<String> {
+        Ok(format!(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>{}",
+            to_xml(&self)?
+        ))
     }
 }
 

@@ -1,6 +1,5 @@
-use crate::headers::Headers;
+use crate::headers::{Headers, RETRY_AFTER, RETRY_AFTER_MS, X_MS_RETRY_AFTER_MS};
 use std::time::Duration;
-use time::OffsetDateTime;
 
 /// Default retry time for long running operations if no retry-after header is present
 ///
@@ -37,13 +36,29 @@ impl From<&str> for LroStatus {
     }
 }
 
+/// Get the duration to delay between polling attempts
+///
+/// This function will check for the following headers in order:
+/// * `Retry-After`
+/// * `retry-after-ms`
+/// * `x-ms-retry-after-ms`
+///
+/// If no header is provided, the default retry time will be returned.
 pub fn get_retry_after(headers: &Headers) -> Duration {
-    crate::get_retry_after(headers, OffsetDateTime::now_utc).unwrap_or(DEFAULT_RETRY_TIME)
+    [RETRY_AFTER, RETRY_AFTER_MS, X_MS_RETRY_AFTER_MS]
+        .iter()
+        .find_map(|header| {
+            headers
+                .get_str(header)
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .map(Duration::from_secs)
+        })
+        .unwrap_or(DEFAULT_RETRY_TIME)
 }
 
 pub mod location {
     use crate::{
-        from_json,
         headers::{Headers, AZURE_ASYNCOPERATION, LOCATION, OPERATION_LOCATION},
         lro::LroStatus,
         Url,
@@ -65,18 +80,15 @@ pub mod location {
     }
 
     pub fn get_provisioning_state(body: &[u8]) -> Option<LroStatus> {
-        #[derive(serde::Deserialize)]
-        struct Body {
-            status: String,
-        }
-        let body: Body = from_json(body).ok()?;
-        Some(LroStatus::from(body.status.as_str()))
+        let body: serde_json::Value = serde_json::from_slice(body).ok()?;
+        let provisioning_state = body["status"].as_str()?;
+        Some(LroStatus::from(provisioning_state))
     }
 }
 
 pub mod body_content {
-    use crate::{from_json, lro::LroStatus, to_json, StatusCode};
-    use serde::{Deserialize, Serialize};
+    use crate::{lro::LroStatus, StatusCode};
+    use serde::Serialize;
 
     /// Extract the provisioning state based on the status code and response body
     ///
@@ -103,22 +115,13 @@ pub mod body_content {
         }
     }
 
-    #[derive(Deserialize)]
-    #[serde(rename_all = "snake_case")]
-    struct Properties {
-        provisioning_state: String,
-    }
-
-    #[derive(Deserialize)]
-    struct Body {
-        properties: Properties,
-    }
-
     fn get_provisioning_state_from_body<S>(body: &S) -> Option<LroStatus>
     where
         S: Serialize,
     {
-        let body: Body = from_json(to_json(&body).ok()?).ok()?;
-        Some(LroStatus::from(body.properties.provisioning_state.as_str()))
+        let body: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(body).ok()?).ok()?;
+        let provisioning_state = body["properties"]["provisioningState"].as_str()?;
+        Some(LroStatus::from(provisioning_state))
     }
 }

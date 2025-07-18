@@ -1,4 +1,5 @@
-use crate::{AppendToUrlQuery, Url};
+use crate::AppendToUrlQuery;
+use std::convert::TryFrom;
 use std::num::NonZeroU32;
 
 // This type forbids zero as value.
@@ -16,7 +17,7 @@ impl MaxResults {
 }
 
 impl AppendToUrlQuery for MaxResults {
-    fn append_to_url_query(&self, url: &mut Url) {
+    fn append_to_url_query(&self, url: &mut url::Url) {
         url.query_pairs_mut()
             .append_pair("maxresults", &format!("{}", self.0));
     }

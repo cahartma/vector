@@ -1,30 +1,38 @@
+use azure_core::auth::TokenCredential;
+use azure_identity::DefaultAzureCredentialBuilder;
+use std::{env::var, error::Error};
+use url::Url;
+
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt().init();
-    let subscription_id =
-        std::env::var("AZURE_SUBSCRIPTION_ID").expect("AZURE_SUBSCRIPTION_ID required");
+async fn main() -> Result<(), Box<dyn Error>> {
+    env_logger::init();
 
-    let credential = azure_identity::create_default_credential()?;
+    let sub_id = var("AZURE_SUBSCRIPTION_ID")?;
+    let creds = DefaultAzureCredentialBuilder::new()
+        .exclude_azure_cli_credential() // disable using CLI for credentials (just as an example)
+        .build();
 
-    // Let's enumerate the Azure storage accounts in the subscription using the REST API directly.
-    // This is just an example. It is easier to use the Azure SDK for Rust crates.
-    let url = url::Url::parse(&format!("https://management.azure.com/subscriptions/{subscription_id}/providers/Microsoft.Storage/storageAccounts?api-version=2019-06-01"))?;
+    let res = creds
+        .get_token("https://management.azure.com/")
+        .await
+        .unwrap();
+    eprintln!("Azure token response == {res:?}");
+    // Let's enumerate the Azure storage accounts
+    // in the subscription. Note: this way of calling the REST API
+    // will be different (and easier) using other Azure Rust SDK
+    // crates, this is just an example.
+    let url = Url::parse(&format!(
+                 "https://management.azure.com/subscriptions/{sub_id}/providers/Microsoft.Storage/storageAccounts?api-version=2019-06-01"
+             ))?;
 
-    let access_token = credential
-        .get_token(&["https://management.azure.com/.default"])
-        .await?;
-
-    let response = reqwest::Client::new()
+    let resp = reqwest::Client::new()
         .get(url)
-        .header(
-            "Authorization",
-            format!("Bearer {}", access_token.token.secret()),
-        )
+        .header("Authorization", format!("Bearer {}", res.token.secret()))
         .send()
         .await?
         .text()
         .await?;
 
-    println!("{response}");
+    println!("{resp}");
     Ok(())
 }

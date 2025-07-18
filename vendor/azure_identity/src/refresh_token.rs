@@ -1,16 +1,16 @@
 //! Refresh token utilities
 
+use azure_core::Method;
 use azure_core::{
-    auth::Secret,
+    auth::AccessToken,
     content_type,
     error::{Error, ErrorKind, ResultExt},
-    headers, HttpClient, Request, Url,
+    headers, HttpClient, Request,
 };
-use azure_core::{from_json, Method};
 use serde::Deserialize;
 use std::fmt;
 use std::sync::Arc;
-use url::form_urlencoded;
+use url::{form_urlencoded, Url};
 
 /// Exchange a refresh token for a new access token and refresh token
 pub async fn exchange(
@@ -18,7 +18,7 @@ pub async fn exchange(
     tenant_id: &str,
     client_id: &str,
     client_secret: Option<&str>,
-    refresh_token: &Secret,
+    refresh_token: &AccessToken,
 ) -> azure_core::Result<RefreshTokenResponse> {
     let encoded = {
         let mut encoded = &mut form_urlencoded::Serializer::new(String::new());
@@ -46,17 +46,16 @@ pub async fn exchange(
 
     let rsp = http_client.execute_request(&req).await?;
     let rsp_status = rsp.status();
+    let rsp_body = rsp.into_body().collect().await?;
 
-    if rsp_status.is_success() {
-        rsp.json().await.map_kind(ErrorKind::Credential)
-    } else {
-        let (rsp_status, rsp_headers, rsp_body) = rsp.deconstruct();
-        let rsp_body = rsp_body.collect().await?;
-        let token_error: RefreshTokenError = from_json(&rsp_body).map_err(|_| {
-            ErrorKind::http_response_from_parts(rsp_status, &rsp_headers, &rsp_body)
-        })?;
-        Err(Error::new(ErrorKind::Credential, token_error))
+    if !rsp_status.is_success() {
+        if let Ok(token_error) = serde_json::from_slice::<RefreshTokenError>(&rsp_body) {
+            return Err(Error::new(ErrorKind::Credential, token_error));
+        }
+        return Err(ErrorKind::http_response_from_body(rsp_status, &rsp_body).into_error());
     }
+
+    serde_json::from_slice::<RefreshTokenResponse>(&rsp_body).map_kind(ErrorKind::Credential)
 }
 
 /// A refresh token
@@ -67,8 +66,8 @@ pub struct RefreshTokenResponse {
     scopes: Vec<String>,
     expires_in: u64,
     ext_expires_in: u64,
-    access_token: Secret,
-    refresh_token: Secret,
+    access_token: AccessToken,
+    refresh_token: AccessToken,
 }
 
 impl RefreshTokenResponse {
@@ -85,11 +84,11 @@ impl RefreshTokenResponse {
         self.expires_in
     }
     /// Issued for the scopes that were requested.
-    pub fn access_token(&self) -> &Secret {
+    pub fn access_token(&self) -> &AccessToken {
         &self.access_token
     }
     /// The new refresh token and should replace old refresh token.
-    pub fn refresh_token(&self) -> &Secret {
+    pub fn refresh_token(&self) -> &AccessToken {
         &self.refresh_token
     }
     /// Indicates the extended lifetime of an `access_token`.
@@ -148,7 +147,7 @@ mod tests {
             "UNUSED",
             "UNUSED",
             None,
-            &Secret::new("UNUSED"),
+            &AccessToken::new("UNUSED"),
         ));
     }
 }

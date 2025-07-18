@@ -17,7 +17,6 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use http::Request;
 use http::StatusCode;
 
@@ -39,17 +38,14 @@ impl YandexDiskWriter {
     }
 }
 
-#[async_trait]
 impl oio::OneShotWrite for YandexDiskWriter {
-    async fn write_once(&self, bs: &dyn oio::WriteBuf) -> Result<()> {
+    async fn write_once(&self, bs: Buffer) -> Result<Metadata> {
         self.core.ensure_dir_exists(&self.path).await?;
 
         let upload_url = self.core.get_upload_url(&self.path).await?;
 
-        let bs = bs.bytes(bs.remaining());
-
         let req = Request::put(upload_url)
-            .body(AsyncBody::Bytes(bs))
+            .body(bs)
             .map_err(new_request_build_error)?;
 
         let resp = self.core.send(req).await?;
@@ -57,11 +53,8 @@ impl oio::OneShotWrite for YandexDiskWriter {
         let status = resp.status();
 
         match status {
-            StatusCode::CREATED => {
-                resp.into_body().consume().await?;
-                Ok(())
-            }
-            _ => Err(parse_error(resp).await?),
+            StatusCode::CREATED => Ok(Metadata::default()),
+            _ => Err(parse_error(resp)),
         }
     }
 }

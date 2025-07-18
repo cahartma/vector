@@ -1,5 +1,6 @@
 use crate::clients::ServiceType;
-use azure_core::Url;
+use std::convert::TryFrom;
+use url::Url;
 
 /// The cloud with which you want to interact.
 // TODO: Other govt clouds?
@@ -12,19 +13,10 @@ pub enum CloudLocation {
     /// Use the well-known emulator
     Emulator { address: String, port: u16 },
     /// A custom base URL
-    Custom { account: String, uri: String },
+    Custom { uri: String },
 }
 
 impl CloudLocation {
-    pub fn account(&self) -> &str {
-        match self {
-            CloudLocation::Public { account, .. }
-            | CloudLocation::China { account, .. }
-            | CloudLocation::Custom { account, .. } => account,
-            CloudLocation::Emulator { .. } => EMULATOR_ACCOUNT,
-        }
-    }
-
     /// the base URL for a given cloud location
     pub fn url(&self, service_type: ServiceType) -> azure_core::Result<Url> {
         let url = match self {
@@ -47,7 +39,7 @@ impl CloudLocation {
                 format!("http://{address}:{port}/{EMULATOR_ACCOUNT}")
             }
         };
-        Ok(Url::parse(&url)?)
+        Ok(url::Url::parse(&url)?)
     }
 }
 

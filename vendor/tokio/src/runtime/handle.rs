@@ -399,6 +399,8 @@ impl Handle {
             scheduler::Handle::CurrentThread(_) => RuntimeFlavor::CurrentThread,
             #[cfg(feature = "rt-multi-thread")]
             scheduler::Handle::MultiThread(_) => RuntimeFlavor::MultiThread,
+            #[cfg(all(tokio_unstable, feature = "rt-multi-thread"))]
+            scheduler::Handle::MultiThreadAlt(_) => RuntimeFlavor::MultiThreadAlt,
         }
     }
 
@@ -427,6 +429,8 @@ impl Handle {
                 scheduler::Handle::CurrentThread(handle) => handle.owned_id(),
                 #[cfg(feature = "rt-multi-thread")]
                 scheduler::Handle::MultiThread(handle) => handle.owned_id(),
+                #[cfg(all(tokio_unstable, feature = "rt-multi-thread"))]
+                scheduler::Handle::MultiThreadAlt(handle) => handle.owned_id(),
             };
             owned_id.into()
         }
@@ -438,10 +442,6 @@ impl Handle {
         RuntimeMetrics::new(self.clone())
     }
 }
-
-impl std::panic::UnwindSafe for Handle {}
-
-impl std::panic::RefUnwindSafe for Handle {}
 
 cfg_taskdump! {
     impl Handle {
@@ -578,6 +578,8 @@ cfg_taskdump! {
                         handle.dump().await
                     }).await
                 },
+                #[cfg(all(tokio_unstable, feature = "rt-multi-thread", not(target_os = "wasi")))]
+                scheduler::Handle::MultiThreadAlt(_) => panic!("task dump not implemented for this runtime flavor"),
             }
         }
 

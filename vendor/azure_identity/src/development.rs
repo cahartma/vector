@@ -2,16 +2,12 @@
 //!
 //! These utilities should not be used in production
 use crate::authorization_code_flow::AuthorizationCodeFlow;
-use azure_core::{
-    error::{Error, ErrorKind},
-    Url,
-};
+use azure_core::error::{Error, ErrorKind};
+use log::debug;
 use oauth2::{AuthorizationCode, CsrfToken};
-use std::{
-    io::{BufRead, BufReader, Write},
-    net::TcpListener,
-};
-use tracing::debug;
+use std::io::{BufRead, BufReader, Write};
+use std::net::TcpListener;
+use url::Url;
 
 /// A very naive implementation of a redirect server.
 ///
@@ -21,7 +17,7 @@ use tracing::debug;
 /// This implementation should only be used for testing.
 pub fn naive_redirect_server(
     auth_obj: &AuthorizationCodeFlow,
-    port: u16,
+    port: u32,
 ) -> azure_core::Result<AuthorizationCode> {
     let listener = TcpListener::bind(format!("127.0.0.1:{port}")).unwrap();
 

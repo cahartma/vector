@@ -1,4 +1,4 @@
-use crate::prelude::*;
+use crate::{blob::Blob, prelude::*};
 use azure_core::{
     error::Error, headers::*, prelude::*, Pageable, RequestId, Response as AzureResponse,
     ResponseBody,
@@ -31,10 +31,9 @@ impl GetBlobBuilder {
 
                 let range = match continuation {
                     Some(range) => range,
-                    None => initial_range(
-                        this.chunk_size.unwrap_or(DEFAULT_CHUNK_SIZE),
-                        this.range.clone(),
-                    ),
+                    None => {
+                        initial_range(this.chunk_size.unwrap_or(DEFAULT_CHUNK_SIZE), this.range)
+                    }
                 };
 
                 this.blob_versioning.append_to_url_query(&mut url);
@@ -55,7 +54,7 @@ impl GetBlobBuilder {
 
                 let response = this.client.send(&mut ctx, &mut request).await?;
 
-                GetBlobResponse::try_from(this, response)
+                GetBlobResponse::try_from(this, response).await
             }
         };
         Pageable::new(make_request)
@@ -73,7 +72,10 @@ pub struct GetBlobResponse {
 }
 
 impl GetBlobResponse {
-    fn try_from(request: GetBlobBuilder, response: AzureResponse) -> azure_core::Result<Self> {
+    async fn try_from(
+        request: GetBlobBuilder,
+        response: AzureResponse,
+    ) -> azure_core::Result<Self> {
         let headers = response.headers();
 
         let request_id = request_id_from_headers(headers)?;
@@ -103,18 +105,17 @@ impl GetBlobResponse {
 impl Continuable for GetBlobResponse {
     type Continuation = Range;
     fn continuation(&self) -> Option<Self::Continuation> {
-        self.remaining_range.clone()
+        self.remaining_range
     }
 }
 
 // calculate the first Range for use at the beginning of the Pageable.
 fn initial_range(chunk_size: u64, request_range: Option<Range>) -> Range {
     match request_range {
-        Some(Range::Range(x)) => {
-            let len = std::cmp::min(x.end - x.start, chunk_size);
-            (x.start..x.start + len).into()
+        Some(range) => {
+            let len = std::cmp::min(range.len(), chunk_size);
+            Range::new(range.start, range.start + len)
         }
-        Some(Range::RangeFrom(x)) => (x.start..x.start + chunk_size).into(),
         None => Range::new(0, chunk_size),
     }
 }
@@ -151,22 +152,19 @@ fn remaining_range(
     // if the response said the end of the blob was downloaded, we're done
     // Note, we add + 1, as we don't need to re-fetch the last
     // byte of the previous request.
-    let after = content_range.end() + 1;
+    if content_range.end() + 1 >= requested_range.end {
+        return None;
+    }
 
-    let remaining_size = match requested_range {
-        Range::Range(x) => {
-            if after >= x.end {
-                return None;
-            }
-            x.end - after
-        }
-        // no requested end
-        Range::RangeFrom(_) => after,
-    };
+    // if the user specified range is smaller than the blob, truncate the
+    // requested range.  Note, we add + 1, as we don't need to re-fetch the last
+    // byte of the previous request.
+    let start = content_range.end() + 1;
+    let remaining_size = requested_range.end - start;
 
     let size = std::cmp::min(remaining_size, chunk_size);
 
-    Some(Range::new(after, after + size))
+    Some(Range::new(start, start + size))
 }
 
 #[cfg(test)]

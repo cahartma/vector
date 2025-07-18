@@ -5,6 +5,7 @@ use azure_core::{
     prelude::*,
     RequestId,
 };
+use std::convert::{TryFrom, TryInto};
 use time::OffsetDateTime;
 
 operation! {

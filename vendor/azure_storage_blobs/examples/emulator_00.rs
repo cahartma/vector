@@ -3,7 +3,7 @@ use futures::StreamExt;
 
 #[tokio::main]
 async fn main() -> azure_core::Result<()> {
-    tracing_subscriber::fmt().init();
+    env_logger::init();
 
     // this is how you use the emulator.
     let container_client = ClientBuilder::emulator().container_client("emulcont");

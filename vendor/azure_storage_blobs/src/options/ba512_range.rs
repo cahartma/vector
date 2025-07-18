@@ -3,7 +3,7 @@ use azure_core::{
     headers::{self, Header},
     prelude::Range,
 };
-use std::{fmt, str::FromStr};
+use std::{convert::TryFrom, fmt, str::FromStr};
 
 /// A 512 byte aligned byte range
 ///
@@ -45,7 +45,10 @@ impl BA512Range {
 
 impl From<BA512Range> for Range {
     fn from(range: BA512Range) -> Self {
-        (range.start()..range.end()).into()
+        Self {
+            start: range.start(),
+            end: range.end(),
+        }
     }
 }
 
@@ -53,12 +56,7 @@ impl TryFrom<Range> for BA512Range {
     type Error = Error;
 
     fn try_from(r: Range) -> azure_core::Result<Self> {
-        match r {
-            Range::Range(r) => BA512Range::new(r.start, r.end),
-            Range::RangeFrom(r) => Err(Error::with_message(ErrorKind::DataConversion, || {
-                format!("error converting RangeFrom<{:?}> into BA512Range", r)
-            })),
-        }
+        BA512Range::new(r.start, r.end)
     }
 }
 
@@ -111,13 +109,17 @@ impl fmt::Display for BA512Range {
 
 impl<'a> From<&'a BA512Range> for Range {
     fn from(ba: &'a BA512Range) -> Range {
-        (ba.start()..ba.end()).into()
+        Range {
+            start: ba.start(),
+            end: ba.end(),
+        }
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+    use azure_core::error::ErrorKind;
 
     #[test]
     fn test_512range_parse() {

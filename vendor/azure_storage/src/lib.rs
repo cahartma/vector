@@ -1,9 +1,25 @@
-#![doc = include_str!("../README.md")]
+/*!
+Storage types and traits for the Rust Azure SDK.
+
+This crate is part of the unofficial Azure SDK effort in Rust. For more
+information on the project, and an overview of other crates, please refer to
+[our GitHub repository](https://github.com/azure/azure-sdk-for-rust).
+
+Please use these crates for additional functionality:
+
+- [`azure_data_tables`](https://crates.io/crates/azure_data_tables)
+- [`azure_storage_blobs`](https://crates.io/crates/azure_storage_blobs)
+- [`azure_storage_datalake`](https://crates.io/crates/azure_storage_datalake)
+- [`azure_storage_queues`](https://crates.io/crates/azure_storage_queues)
+*/
+
 #![recursion_limit = "256"]
 #![allow(clippy::needless_lifetimes)]
 #![allow(clippy::enum_variant_names)]
 #![allow(clippy::new_without_default)]
 
+#[macro_use]
+extern crate log;
 #[macro_use]
 extern crate serde_derive;
 #[macro_use]
@@ -16,6 +32,7 @@ mod connection_string;
 mod connection_string_builder;
 mod copy_id;
 mod copy_progress;
+pub mod hmac;
 mod macros;
 pub mod prelude;
 pub mod shared_access_signature;
@@ -48,7 +65,7 @@ mod consistency {
     };
     use bytes::Bytes;
     use serde::{Deserialize, Deserializer};
-    use std::str::FromStr;
+    use std::{convert::TryInto, str::FromStr};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct ConsistencyCRC64(Bytes);

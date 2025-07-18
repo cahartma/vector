@@ -1,4 +1,4 @@
-use crate::prelude::*;
+use crate::{container::PublicAccess, prelude::*};
 use azure_core::Method;
 use azure_core::{headers::AsHeaders, headers::Headers, prelude::*};
 

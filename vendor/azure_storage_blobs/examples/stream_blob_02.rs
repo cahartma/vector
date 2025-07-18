@@ -7,7 +7,6 @@ use azure_storage_blobs::prelude::*;
 use clap::Parser;
 use std::path::PathBuf;
 use tokio::fs::File;
-use tracing::info;
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -40,7 +39,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> azure_core::Result<()> {
-    tracing_subscriber::fmt().init();
+    env_logger::init();
     let args = Args::parse();
 
     let storage_credentials =
@@ -70,10 +69,10 @@ async fn main() -> azure_core::Result<()> {
     if let Some(block_size) = args.block_size {
         let mut block_list = BlockList::default();
         for offset in (handle.offset..handle.stream_size).step_by(block_size as usize) {
-            info!("trying to upload at offset {offset} - {block_size}");
+            log::info!("trying to upload at offset {offset} - {block_size}");
             let block_id = format!("{:08X}", offset);
             blob_client.put_block(block_id.clone(), &handle).await?;
-            info!("uploaded block {block_id}");
+            log::info!("uploaded block {block_id}");
             block_list
                 .blocks
                 .push(BlobBlockType::new_uncommitted(block_id));

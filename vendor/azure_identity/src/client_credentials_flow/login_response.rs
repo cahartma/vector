@@ -1,4 +1,4 @@
-use azure_core::auth::Secret;
+use azure_core::auth::AccessToken;
 use serde::{Deserialize, Deserializer};
 use time::OffsetDateTime;
 
@@ -21,7 +21,7 @@ pub struct LoginResponse {
     pub expires_on: Option<OffsetDateTime>,
     pub not_before: Option<OffsetDateTime>,
     pub resource: Option<String>,
-    pub access_token: Secret,
+    pub access_token: AccessToken,
 }
 
 impl<'de> Deserialize<'de> for LoginResponse {
@@ -35,7 +35,7 @@ impl<'de> Deserialize<'de> for LoginResponse {
 }
 
 impl LoginResponse {
-    pub fn access_token(&self) -> &Secret {
+    pub fn access_token(&self) -> &AccessToken {
         &self.access_token
     }
 
@@ -56,7 +56,7 @@ impl LoginResponse {
             expires_on,
             not_before,
             resource: r.resource,
-            access_token: r.access_token.into(),
+            access_token: AccessToken::new(r.access_token),
         }
     }
 }

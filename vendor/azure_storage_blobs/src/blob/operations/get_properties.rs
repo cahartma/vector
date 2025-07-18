@@ -1,4 +1,4 @@
-use crate::prelude::*;
+use crate::{blob::Blob, prelude::*};
 use azure_core::{headers::*, prelude::*, RequestId};
 use time::OffsetDateTime;
 

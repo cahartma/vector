@@ -1,4 +1,4 @@
-use crate::{AppendToUrlQuery, Url};
+use crate::AppendToUrlQuery;
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy)]
@@ -11,7 +11,7 @@ impl Timeout {
 }
 
 impl AppendToUrlQuery for Timeout {
-    fn append_to_url_query(&self, url: &mut Url) {
+    fn append_to_url_query(&self, url: &mut url::Url) {
         if url.query_pairs().any(|(k, _)| k == "timeout") {
             return;
         }
