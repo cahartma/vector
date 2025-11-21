@@ -6,7 +6,10 @@ use aws_sdk_cloudwatchlogs::{
         put_log_events::{PutLogEventsError, PutLogEventsOutput},
         put_retention_policy::PutRetentionPolicyError,
     },
-    types::InputLogEvent,
+    types::{
+        InputLogEvent,
+        LogGroupClass,
+    },
     Client as CloudwatchLogsClient,
 };
 use aws_smithy_runtime_api::client::{orchestrator::HttpResponse, result::SdkError};
@@ -42,6 +45,7 @@ struct Client {
     retention_days: u32,
     kms_key: Option<String>,
     tags: Option<HashMap<String, String>>,
+    log_group_class: Option<String>,
 }
 
 type ClientResult<T, E> = BoxFuture<'static, Result<T, SdkError<E, HttpResponse>>>;
@@ -67,6 +71,7 @@ impl CloudwatchFuture {
         retention: Retention,
         kms_key: Option<String>,
         tags: Option<HashMap<String, String>>,
+        log_group_class: Option<String>,
         mut events: Vec<Vec<InputLogEvent>>,
         token: Option<String>,
         token_tx: oneshot::Sender<Option<String>>,
@@ -80,6 +85,7 @@ impl CloudwatchFuture {
             retention_days,
             kms_key,
             tags,
+            log_group_class,
         };
 
         let state = if let Some(token) = token {
@@ -173,6 +179,20 @@ impl Future for CloudwatchFuture {
                     };
 
                     info!(message = "Group created.", name = %self.client.group_name);
+
+                    // MIGHT NOT BE NECESSARY????   just let the putRetention error be returned?
+                    // Local validation for the DELIVERY class constraint
+                    /*
+                    if let Some(class) = &self.client.log_group_class {
+                        if class.to_uppercase() == "DELIVERY" && self.retention_enabled && self.client.retention_days != 1 {
+                            let msg = format!(
+                                "The log_group_class 'DELIVERY' requires retention to be exactly 1 day. Configured retention: {} days.",
+                                self.client.retention_days
+                            );
+                            return Poll::Ready(Err(CloudwatchError::Config(msg)));
+                        }
+                    }
+                    */
 
                     if self.retention_enabled {
                         self.state = State::PutRetentionPolicy(self.client.put_retention_policy());
@@ -296,12 +316,17 @@ impl Client {
         let group_name = self.group_name.clone();
         let kms_key = self.kms_key.clone();
         let tags = self.tags.clone();
+        let log_group_class = self.log_group_class.clone();
         Box::pin(async move {
+            let log_group_class_enum = log_group_class.and_then(|s| {
+                s.to_uppercase().parse::<LogGroupClass>().ok()
+            });
             client
                 .create_log_group()
                 .log_group_name(group_name)
                 .set_kms_key_id(kms_key)
                 .set_tags(tags)
+                .set_log_group_class(log_group_class_enum)
                 .send()
                 .await?;
             Ok(())
