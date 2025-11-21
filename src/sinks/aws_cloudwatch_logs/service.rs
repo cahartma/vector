@@ -65,6 +65,7 @@ pub enum CloudwatchError {
     CreateGroup(SdkError<CreateLogGroupError, HttpResponse>),
     PutRetentionPolicy(SdkError<PutRetentionPolicyError, HttpResponse>),
     NoStreamsFound,
+    Config(String),
 }
 
 impl fmt::Display for CloudwatchError {
@@ -83,6 +84,9 @@ impl fmt::Display for CloudwatchError {
             CloudwatchError::NoStreamsFound => write!(f, "CloudwatchError: No Streams Found"),
             CloudwatchError::PutRetentionPolicy(error) => {
                 write!(f, "CloudwatchError::PutRetentionPolicy: {}", error)
+            }
+            CloudwatchError::Config(msg) => {
+                write!(f, "CloudwatchError: Configuration error: {}", msg)
             }
         }
     }
@@ -242,6 +246,7 @@ impl CloudwatchLogsSvc {
 
         let kms_key = config.kms_key.clone();
         let tags = config.tags.clone();
+        let log_group_class = config.log_group_class.clone();
 
         CloudwatchLogsSvc {
             headers,
@@ -253,6 +258,7 @@ impl CloudwatchLogsSvc {
             retention,
             kms_key,
             tags,
+            log_group_class,
             token: None,
             token_rx: None,
         }
@@ -329,6 +335,7 @@ impl Service<Vec<InputLogEvent>> for CloudwatchLogsSvc {
                 self.retention.clone(),
                 self.kms_key.clone(),
                 self.tags.clone(),
+                self.log_group_class.clone(),
                 event_batches,
                 self.token.take(),
                 tx,
@@ -349,6 +356,7 @@ pub struct CloudwatchLogsSvc {
     retention: Retention,
     kms_key: Option<String>,
     tags: Option<HashMap<String, String>>,
+    log_group_class: Option<String>,
     token: Option<String>,
     token_rx: Option<oneshot::Receiver<Option<String>>>,
 }
