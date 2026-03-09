@@ -4,7 +4,6 @@
 use bytes::{Bytes, BytesMut};
 
 use futures_util::{future::BoxFuture, task::Poll};
-use goauth::scopes::Scope;
 use http::header::{self, HeaderName, HeaderValue};
 use http::{Request, StatusCode, Uri};
 use hyper::Body;
@@ -30,7 +29,7 @@ use crate::sinks::util::service::TowerRequestConfigDefaults;
 use crate::{
     codecs::{self, EncodingConfig},
     config::{GenerateConfig, SinkConfig, SinkContext},
-    gcp::{GcpAuthConfig, GcpAuthenticator},
+    gcp::{scopes, GcpAuthConfig, GcpAuthenticator},
     http::HttpClient,
     schema,
     sinks::{
@@ -302,7 +301,9 @@ pub enum ChronicleError {
 #[typetag::serde(name = "gcp_chronicle_unstructured")]
 impl SinkConfig for ChronicleUnstructuredConfig {
     async fn build(&self, cx: SinkContext) -> crate::Result<(VectorSink, Healthcheck)> {
-        let creds = self.auth.build(Scope::MalachiteIngestion).await?;
+        // Chronicle uses the full cloud platform scope for authentication
+        // (previously used Scope::MalachiteIngestion which was Chronicle-specific)
+        let creds = self.auth.build(&[scopes::CLOUD_PLATFORM]).await?;
 
         let tls = TlsSettings::from_options(self.tls.as_ref())?;
         let client = HttpClient::new(tls, cx.proxy())?;

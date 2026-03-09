@@ -1,5 +1,4 @@
 use bytes::Bytes;
-use goauth::scopes::Scope;
 use http::{header::CONTENT_TYPE, Request, Uri};
 
 use super::{
@@ -7,7 +6,7 @@ use super::{
     sink::StackdriverMetricsSink,
 };
 use crate::{
-    gcp::{GcpAuthConfig, GcpAuthenticator},
+    gcp::{scopes, GcpAuthConfig, GcpAuthenticator},
     http::HttpClient,
     sinks::{
         gcp,
@@ -94,7 +93,7 @@ impl_generate_config_from_default!(StackdriverConfig);
 #[typetag::serde(name = "gcp_stackdriver_metrics")]
 impl SinkConfig for StackdriverConfig {
     async fn build(&self, cx: SinkContext) -> crate::Result<(VectorSink, Healthcheck)> {
-        let auth = self.auth.build(Scope::MonitoringWrite).await?;
+        let auth = self.auth.build(&[scopes::MONITORING_WRITE]).await?;
 
         let healthcheck = healthcheck().boxed();
         let started = chrono::Utc::now();

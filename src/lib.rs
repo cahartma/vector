@@ -6,6 +6,7 @@
 #![deny(unused_comparisons)]
 #![deny(warnings)]
 #![deny(missing_docs)]
+#![cfg_attr(test, allow(dead_code))]
 #![cfg_attr(docsrs, feature(doc_cfg), deny(rustdoc::broken_intra_doc_links))]
 #![allow(async_fn_in_trait)]
 #![allow(clippy::approx_constant)]
