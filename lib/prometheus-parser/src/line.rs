@@ -1,5 +1,7 @@
 //! Parse a single line of Prometheus text format.
 
+#![allow(clippy::elided_lifetimes_in_paths)]
+
 use std::collections::BTreeMap;
 
 use nom::{

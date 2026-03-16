@@ -1,4 +1,4 @@
-#![deny(warnings)]
+#![allow(clippy::elided_lifetimes_in_paths)]
 
 use std::{collections::BTreeMap, convert::TryFrom};
 

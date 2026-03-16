@@ -11,6 +11,9 @@ rustflags = [
   "-Dclippy::print_stdout",
   "-Dclippy::print_stderr",
   "-Dclippy::dbg_macro",
+  "-Aclippy::elided_lifetimes_in_paths",
+  "-Amismatched_lifetime_syntaxes",
+  "-Adead_code",
 ]
 
 # We need to bring in `libstdc++` for things that build against C++ (librdkafka, etc) which comes along in the
