@@ -1,0 +1,28 @@
+The changes are isolated to the internal implementation of the CloudWatch sink:
+
+### 1. `src/sinks/aws_cloudwatch_logs/config.rs`
+
+This file introduces the new user-facing configuration parameter:
+
+* **New Configuration Field:** The `CloudwatchLogsSinkConfig` struct gains a new optional field:
+```rust
+pub log_group_class: Option<String>,
+```
+* **Documentation:** Configuration documentation is included, clarifying that the allowed values are **`standard`** and **`infrequent_access`**, and that the default behavior (when not configured) is `standard`.
+
+### 2. `src/sinks/aws_cloudwatch_logs/request.rs`
+
+This file handles the actual interaction with the AWS SDK and the `CreateLogGroup` API call:
+
+* **Internal Data Structure Update:** The internal `Client` struct is updated to carry the new `log_group_class` value.
+* **AWS SDK Integration:** In the `Client::create_log_group` function, the implementation now includes:
+* Logic to parse the input configuration string into the AWS SDK's required `LogGroupClass` enum type.
+* The use of the `.set_log_group_class()` method in the `client.create_log_group()` builder call to pass the desired class to AWS.
+* **Context for Tagging:** This is the same function where the configuration values for `kms_key` and **`tags`** are consumed via `.set_kms_key_id()` and **`.set_tags()`**, confirming that all log group creation parameters are managed in one atomic request.
+
+### 3. `src/sinks/aws_cloudwatch_logs/service.rs`
+
+This file updates the service layer to manage the flow of the new configuration:
+
+* **Service Struct Update:** The `CloudwatchLogsSvc` struct is updated to store the `log_group_class`.
+* **Configuration Propagation:** The `log_group_class` is correctly cloned from the `CloudwatchLogsSinkConfig` and passed into both the `CloudwatchLogsSvc` and the execution `CloudwatchFuture`, ensuring the value is available when the `CreateLogGroup` request is initiated.
